@@ -1,10 +1,11 @@
 import pytest
 from poe2bot.store import Store
+import discord
 from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_categories_logic,
                          set_threshold_logic, price_text, topmovers_text,
                          set_alert_channel_logic, set_health_channel_logic, resolve_channel_id,
                          ItemService, filter_item_choices, filter_category_choices, CATEGORIES,
-                         sync_target_guilds)
+                         sync_target_guilds, sync_commands)
 from poe2bot.models import Observation, LiquidityTier
 
 
@@ -148,6 +149,53 @@ def test_sync_target_guilds():
     assert sync_target_guilds(None, [1, 2]) == [1, 2]
     # unset and not in any guild -> empty (caller falls back to a global sync)
     assert sync_target_guilds(None, []) == []
+
+
+class _FakeResp:
+    status = 403
+    reason = "Forbidden"
+
+
+class _FakeTree:
+    """Records CommandTree calls; raises HTTPException for guilds in `fail`."""
+    def __init__(self, fail=()):
+        self.fail = set(fail)
+        self.copied, self.guild_syncs, self.global_syncs, self.cleared = [], [], 0, 0
+
+    def copy_global_to(self, guild): self.copied.append(guild.id)
+
+    async def sync(self, guild=None):
+        if guild is None:
+            self.global_syncs += 1
+            return
+        if guild.id in self.fail:
+            raise discord.HTTPException(_FakeResp(), "missing access")
+        self.guild_syncs.append(guild.id)
+
+    def clear_commands(self, guild=None): self.cleared += 1
+
+
+async def test_sync_commands_guild_success_clears_globals():
+    t = _FakeTree()
+    r = await sync_commands(t, [10, 20], guild_id=None)       # auto-detect both joined guilds
+    assert r == {"mode": "guild", "synced": [10, 20], "failed": []}
+    assert t.copied == [10, 20] and t.guild_syncs == [10, 20]
+    assert t.cleared == 1 and t.global_syncs == 1             # globals cleared + pushed empty
+
+
+async def test_sync_commands_bad_guild_keeps_globals():
+    # the dangerous case: an explicit but wrong/inaccessible id must NOT strand the bot
+    t = _FakeTree(fail={999})
+    r = await sync_commands(t, [1, 2], guild_id=999)
+    assert r["synced"] == [] and r["failed"] == [999]
+    assert t.cleared == 0 and t.global_syncs == 0             # globals left intact
+
+
+async def test_sync_commands_no_targets_falls_back_global():
+    t = _FakeTree()
+    r = await sync_commands(t, [], guild_id=None)             # in no guild, no id set
+    assert r["mode"] == "global"
+    assert t.global_syncs == 1 and t.cleared == 0 and t.guild_syncs == []
 
 
 def test_categories_constant_shape():

@@ -1,8 +1,11 @@
 from __future__ import annotations
 import asyncio
+import logging
 import time
 import discord
 from discord import app_commands
+
+log = logging.getLogger(__name__)
 from discord.ext import commands
 from .store import Store
 from .sources.poe2scout import Poe2ScoutClient
@@ -86,6 +89,35 @@ def sync_target_guilds(guild_id: int | None, joined_guild_ids: list[int]) -> lis
     if guild_id:
         return [guild_id]
     return list(joined_guild_ids)
+
+
+async def sync_commands(tree, joined_guild_ids: list[int], guild_id: int | None) -> dict:
+    """Push slash commands so they appear instantly.
+
+    Per target guild: copy the globals into the guild and sync (instant). The global copies
+    are cleared ONLY if at least one guild synced — otherwise a wrong/inaccessible guild id
+    would both fail to sync AND strand the bot with no commands. With no targets at all, fall
+    back to a global sync. Returns {"mode", "synced", "failed"} for logging/tests."""
+    targets = sync_target_guilds(guild_id, joined_guild_ids)
+    if not targets:
+        await tree.sync()
+        return {"mode": "global", "synced": [], "failed": []}
+    synced: list[int] = []
+    failed: list[int] = []
+    for gid in targets:
+        try:
+            tree.copy_global_to(guild=discord.Object(id=gid))
+            await tree.sync(guild=discord.Object(id=gid))
+            synced.append(gid)
+        except discord.HTTPException as e:
+            failed.append(gid)
+            log.warning("slash-command sync to guild %s failed: %s", gid, e)
+    if synced:
+        tree.clear_commands(guild=None)   # drop global copies so commands don't show twice
+        await tree.sync()
+    else:
+        log.warning("all guild syncs failed (%s); leaving global commands intact", failed)
+    return {"mode": "guild", "synced": synced, "failed": failed}
 
 
 def filter_item_choices(pairs: list[tuple[str, str]], current: str,
@@ -195,23 +227,18 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
 
     @bot.event
     async def on_ready():
-        # Guild-scoped command sync propagates instantly (vs. up to ~1h for global). Target
-        # the explicit DISCORD_GUILD_ID, else auto-detect every joined guild. After pushing
-        # to guilds, clear the global copies so commands don't show twice (global + guild).
-        guild_id = getattr(settings, "discord_guild_id", None) if settings else None
-        targets = sync_target_guilds(guild_id, [g.id for g in bot.guilds])
-        if targets:
-            for gid in targets:
-                g = discord.Object(id=gid)
-                try:
-                    bot.tree.copy_global_to(guild=g)
-                    await bot.tree.sync(guild=g)
-                except discord.HTTPException:
-                    pass        # wrong id or missing access — skip, don't crash startup
-            bot.tree.clear_commands(guild=None)
-            await bot.tree.sync()
-        else:
-            await bot.tree.sync()
+        # Sync once per process: on_ready can re-fire on reconnect/RESUME, and command-sync
+        # endpoints are heavily rate-limited. Guild-scoped sync propagates instantly (vs. up
+        # to ~1h for global); target the explicit DISCORD_GUILD_ID, else auto-detect joined
+        # guilds. bot.guilds is only populated here (not in setup_hook), so this lives here.
+        if not getattr(bot, "_commands_synced", False):
+            guild_id = getattr(settings, "discord_guild_id", None) if settings else None
+            try:
+                result = await sync_commands(bot.tree, [g.id for g in bot.guilds], guild_id)
+                log.info("slash-command sync: %s", result)
+            except discord.HTTPException as e:
+                log.warning("command sync failed: %s", e)
+            bot._commands_synced = True
         # Best-effort cache pre-warm so the first /price autocomplete is already hot.
         try:
             await item_service.available(int(time.time()))

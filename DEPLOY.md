@@ -96,7 +96,8 @@ The named volume `poe2bot-data` keeps your SQLite ledger across restarts/updates
 > startup**, so they appear within seconds — no `DISCORD_GUILD_ID` needed. (If you'd rather
 > pin to one specific server, set `DISCORD_GUILD_ID=<your server ID>` in the env file.) Only
 > if the bot is in *no* server at startup does it fall back to global sync, which Discord can
-> take up to ~1h to propagate.
+> take up to ~1h to propagate. Because the auto-sync runs once at startup, if you add the bot
+> to a **new** server later, restart the container so its commands sync there too.
 
 Alerts begin once the ledger has built a baseline (a few hours of polling).
 
