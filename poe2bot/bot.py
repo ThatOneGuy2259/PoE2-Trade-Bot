@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from .store import Store
 from .sources.poe2scout import Poe2ScoutClient
+from .models import LiquidityTier
 from .signals import wfs_phase1, to_currencies
 
 
@@ -51,7 +52,7 @@ async def price_text(store: Store, item_id: str) -> str:
     px, pdiv, pchaos = to_currencies(obs.price_exalt, divine, chaos_divine)
     vol = obs.volume or 0.0
     wfs = wfs_phase1(obs.price_exalt, obs.liq_tier.gate, max(divine, 1e-9), vol)
-    note = "  ⚠ low liquidity" if obs.liq_tier.name == "LOW" else ""
+    note = "  ⚠ low liquidity" if obs.liq_tier == LiquidityTier.LOW else ""
     return (f"**{obs.name}** — {px:,.4g} ex | {pdiv:,.4g} div | {pchaos:,.4g} chaos\n"
             f"Liquidity: {obs.liq_tier.name}{note} | daily volume: {vol:,.0f} | WFS: {wfs:.3g}")
 

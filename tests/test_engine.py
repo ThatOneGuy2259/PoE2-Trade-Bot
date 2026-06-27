@@ -178,6 +178,23 @@ async def test_demand_collapse_cooldown_suppresses_second_fire(tmp_path):
     await s.close()
 
 
+async def test_low_liquidity_needs_confirmation_and_flags(tmp_path):
+    """A LOW-liquidity item must clear 2-of-3 even on a big move (no immediate fast-path),
+    and its alert is tagged low_confidence."""
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig()
+    await _seed_flat(s, "rare", base_ts=99_980, vol=800.0)     # daily vol 800 -> LOW tier
+    def low_obs(src_ts):
+        return _cur(1.6, 800.0, src_ts=src_ts, item="rare", tier=LiquidityTier.LOW)  # +60% move
+    k1, _ = await detect(s, [low_obs(100_001)], Anchor(250.0, 1.0),
+                         league_started_at=0, now_ts=100_010, cfg=cfg)
+    assert k1 == []                                            # +60% on a LOW item does NOT fire immediately
+    k2, _ = await detect(s, [low_obs(100_002)], Anchor(250.0, 1.0),
+                         league_started_at=0, now_ts=101_810, cfg=cfg)
+    assert len(k2) == 1 and k2[0].cls == "JUMP" and k2[0].low_confidence is True
+    await s.close()
+
+
 async def test_statistical_path_blocked_during_warmup(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
     cfg = DetectConfig()                                # min_samples 12
