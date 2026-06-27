@@ -167,9 +167,7 @@ async def pollnow_logic(store: Store, poll_now) -> str:
     n = await poll_now()
     if n < 0:
         return "⚠️ poe2scout fetch failed (source down). Try again shortly."
-    row = await (await store._db.execute(
-        "SELECT COUNT(*) c FROM obs WHERE src_ts=(SELECT MAX(src_ts) FROM obs)")).fetchone()
-    items = row["c"] if row else 0
+    items = await store.count_obs_at_latest_poll()
     return (f"✅ Polled **{league}** — {items} item(s) ingested, {n} alert(s) fired. "
             f"(a cold ledger fires 0 until a baseline builds over the next few polls)")
 
@@ -261,6 +259,16 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
             await item_service.available(int(time.time()))
         except Exception:
             pass
+        # One immediate poll, AFTER the gateway is connected (so any alert can actually send
+        # via bot.get_channel) and once per process (on_ready re-fires on reconnect). This is
+        # why the scheduler's first run is a full interval out, not next_run_time=now.
+        if poll_now is not None and not getattr(bot, "_initial_poll_done", False):
+            bot._initial_poll_done = True
+            try:
+                n = await poll_now()
+                log.info("startup poll fired %s alert(s)", n)
+            except Exception as e:
+                log.warning("startup poll failed: %s", e)
 
     async def _league_autocomplete(interaction: discord.Interaction, current: str):
         leagues = await league_service.available(int(time.time()))

@@ -101,6 +101,13 @@ class Store:
         row = await cur.fetchone()
         return _row_to_obs(row) if row else None
 
+    async def count_obs_at_latest_poll(self) -> int:
+        """Number of observations sharing the newest src_ts (i.e. rows from the last poll)."""
+        cur = await self._db.execute(
+            "SELECT COUNT(*) c FROM obs WHERE src_ts=(SELECT MAX(src_ts) FROM obs)")
+        row = await cur.fetchone()
+        return int(row["c"]) if row else 0
+
     async def price_log_window(self, item_id: str, since_ts: int) -> list[float]:
         cur = await self._db.execute(
             "SELECT log_price FROM obs WHERE item_id=? AND src_ts>=? AND valid=1 ORDER BY src_ts",

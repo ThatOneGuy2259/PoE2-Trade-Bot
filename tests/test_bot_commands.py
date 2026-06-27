@@ -94,7 +94,7 @@ async def test_pollnow_logic_success_reports_counts(tmp_path):
         return 1
     msg = await pollnow_logic(s, poll_now)
     assert "Runes of Aldur" in msg
-    assert "2" in msg and "1" in msg              # 2 items ingested, 1 alert fired
+    assert "2 item" in msg and "1 alert" in msg   # 2 items ingested, 1 alert fired
     await s.close()
 
 async def test_status_text(tmp_path):
