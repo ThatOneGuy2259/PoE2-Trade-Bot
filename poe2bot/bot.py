@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+import time
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -185,33 +187,42 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
     @bot.event
     async def on_ready():
         await bot.tree.sync()
+        # Best-effort cache pre-warm so the first /price autocomplete is already hot.
+        try:
+            await item_service.available(int(time.time()))
+        except Exception:
+            pass
 
     async def _league_autocomplete(interaction: discord.Interaction, current: str):
-        import time
         leagues = await league_service.available(int(time.time()))
         return [app_commands.Choice(name=l, value=l)
                 for l in leagues if current.lower() in l.lower()][:25]
 
     async def _item_autocomplete(interaction: discord.Interaction, current: str):
-        import time
-        pairs = await item_service.available(int(time.time()))
+        # Autocomplete must answer within Discord's ~3s budget. Steady state is a cached,
+        # in-memory filter; the cold/expired/league-change path fetches the catalog, so
+        # bound it and degrade to "no suggestions" rather than raise on a slow/failed fetch.
+        try:
+            pairs = await asyncio.wait_for(item_service.available(int(time.time())), timeout=2.0)
+        except Exception:   # timeout, network, or parse — degrade to no suggestions
+            return []
         return [app_commands.Choice(name=name[:100], value=api_id)
                 for (name, api_id) in filter_item_choices(pairs, current)]
 
     async def _category_autocomplete(interaction: discord.Interaction, current: str):
-        return [app_commands.Choice(name=disp[:100], value=val[:100])
-                for (disp, val) in filter_category_choices(current)]
+        # Presets are static/in-memory; drop (don't slice) any value over Discord's 100-char
+        # limit so a long comma chain can't submit a token truncated mid-word.
+        return [app_commands.Choice(name=val, value=val)
+                for (disp, val) in filter_category_choices(current) if len(val) <= 100]
 
     @bot.tree.command(name="leagues", description="List currently available leagues")
     async def leagues_cmd(interaction: discord.Interaction):
-        import time
         leagues = await league_service.available(int(time.time()))
         await interaction.response.send_message(", ".join(leagues) or "(none)", ephemeral=True)
 
     @bot.tree.command(name="setleague", description="Set the active league")
     @app_commands.autocomplete(name=_league_autocomplete)
     async def setleague_cmd(interaction: discord.Interaction, name: str):
-        import time
         leagues = await league_service.available(int(time.time()))
         try:
             msg = await setleague_logic(store, leagues, name)

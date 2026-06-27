@@ -104,7 +104,8 @@ async def test_item_service_caches_and_keys_on_league(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
     items = [{"ApiId": "divine", "Text": "Divine Orb"},
              {"ApiId": "exalted", "Text": "Exalted Orb"},
-             {"ApiId": "noname"}]                      # missing Text -> falls back to ApiId
+             {"ApiId": "noname"},                       # missing Text -> falls back to ApiId
+             {"Text": "No Id Here"}]                     # missing ApiId -> skipped entirely
     c = _StubItemClient(items)
     svc = ItemService(c, s, ttl_s=100)
     # no league set -> empty, and no fetch attempted
@@ -114,6 +115,7 @@ async def test_item_service_caches_and_keys_on_league(tmp_path):
     pairs = await svc.available(now_ts=0)
     assert ("Divine Orb", "divine") in pairs
     assert ("noname", "noname") in pairs               # Text fallback -> ApiId
+    assert all(name != "No Id Here" for name, _ in pairs)   # ApiId-less item dropped
     assert c.calls == 1
     await svc.available(now_ts=50)                      # within ttl -> cached
     assert c.calls == 1
