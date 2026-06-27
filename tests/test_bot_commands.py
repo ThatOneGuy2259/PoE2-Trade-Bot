@@ -1,7 +1,38 @@
 import pytest
 from poe2bot.store import Store
-from poe2bot.bot import LeagueService, setleague_logic, status_text, set_categories_logic, set_threshold_logic, price_text, topmovers_text
+from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_categories_logic,
+                         set_threshold_logic, price_text, topmovers_text,
+                         set_alert_channel_logic, set_health_channel_logic, resolve_channel_id)
 from poe2bot.models import Observation, LiquidityTier
+
+
+async def test_set_alert_channel_persists_and_resolves(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    # before any /setchannel: resolver falls back to the env default
+    assert await resolve_channel_id(s, "alert_channel_id", fallback=42) == 42
+    assert await resolve_channel_id(s, "alert_channel_id", fallback=None) is None
+    # /setchannel sets it live; resolver now returns the stored value, ignoring the fallback
+    msg = await set_alert_channel_logic(s, 999)
+    assert "999" in msg
+    assert await s.get_setting("alert_channel_id") == "999"
+    assert await resolve_channel_id(s, "alert_channel_id", fallback=42) == 999
+    await s.close()
+
+
+async def test_set_health_channel_persists(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await set_health_channel_logic(s, 555)
+    assert await resolve_channel_id(s, "health_channel_id", fallback=None) == 555
+    await s.close()
+
+
+async def test_status_shows_channel(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    txt = await status_text(s)
+    assert "Alert channel" in txt                    # shown even when unset
+    await set_alert_channel_logic(s, 777)
+    assert "777" in await status_text(s)              # reflects the live setting
+    await s.close()
 
 class _StubClient:
     def __init__(self, leagues): self._l = leagues; self.calls = 0

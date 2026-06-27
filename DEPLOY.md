@@ -45,17 +45,19 @@ cp .env.example poe2bot.env
 chmod 600 poe2bot.env          # readable only by you
 nano poe2bot.env               # fill in the values below
 ```
-Set at minimum:
+The **only required** value is the token:
 ```ini
 DISCORD_TOKEN=<paste your bot token here, on the server only>
-ALERT_CHANNEL_ID=<your alerts channel ID>
-HEALTH_CHANNEL_ID=<optional health channel ID, or leave blank>
+ALERT_CHANNEL_ID=<optional — or leave blank and set it live with /setchannel>
+HEALTH_CHANNEL_ID=<optional>
 POLL_INTERVAL_MIN=30
 POE2SCOUT_UA=poe2bot/0.1 (contact: you@example.com)
 DB_PATH=/data/poe2bot.db
 ```
-(Leave `DB_PATH=/data/poe2bot.db` — that's the path inside the container, backed by the
-volume in step 5.)
+You can leave `ALERT_CHANNEL_ID` blank and just run **`/setchannel`** in the room you want
+alerts in (see step 6) — that's stored in the DB and takes effect immediately, so changing
+rooms later never needs an env edit or restart. (Leave `DB_PATH=/data/poe2bot.db` — that's
+the path inside the container, backed by the volume in step 5.)
 
 ## 4. Verify the data path before going live (no token needed)
 
@@ -82,9 +84,12 @@ The named volume `poe2bot-data` keeps your SQLite ledger across restarts/updates
 
 ## 6. Verify in Discord
 
-1. Run `/setleague` — it autocompletes from the live league list; pick the current league.
-2. `/status` — shows league, last poll, alert cap.
-3. `/price divine` — shows the price in Exalted / Divine / Chaos.
+1. In the channel you want alerts in, run **`/setchannel`** (admin-only) — alerts now post
+   there. To move rooms later, just run `/setchannel` in the new room; no restart needed.
+   (Optionally `/sethealthchannel` for the pipeline-health messages.)
+2. `/setleague` — autocompletes from the live league list; pick the current league.
+3. `/status` — shows league, last poll, alert cap, and the current alert/health channels.
+4. `/price divine` — shows the price in Exalted / Divine / Chaos.
 
 > First-time note: **global slash commands can take up to ~1 hour to appear** after the
 > bot first starts (a Discord propagation limit, not a bug). If you want them instantly,

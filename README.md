@@ -4,9 +4,9 @@ Polls poe2scout, alerts on price jumps/crashes/demand collapse.
 
 ## Run
 
-1. `cp .env.example .env` and fill DISCORD_TOKEN + ALERT_CHANNEL_ID.
+1. `cp .env.example .env` and fill DISCORD_TOKEN (the alert channel is optional — set it live with `/setchannel`).
 2. `pip install -e ".[dev]" && python -m poe2bot.main`
-3. In Discord: `/setleague` (autocompletes live), then wait for polls to accrue.
+3. In Discord: `/setchannel` (in the room you want alerts), `/setleague` (autocompletes live), then wait for polls to accrue.
 
 ## Try it without a Discord token
 

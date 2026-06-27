@@ -43,6 +43,22 @@ async def set_threshold_logic(store: Store, category: str, spike_pct: float) -> 
     return f"Threshold for {category} set to {spike_pct:.0%}"
 
 
+async def set_alert_channel_logic(store: Store, channel_id: int) -> str:
+    await store.set_setting("alert_channel_id", str(channel_id))
+    return f"✅ Price/demand alerts will now post in <#{channel_id}>."
+
+
+async def set_health_channel_logic(store: Store, channel_id: int) -> str:
+    await store.set_setting("health_channel_id", str(channel_id))
+    return f"✅ Pipeline-health messages will now post in <#{channel_id}>."
+
+
+async def resolve_channel_id(store: Store, key: str, fallback: int | None) -> int | None:
+    """Channel set live via a command wins; otherwise fall back to the env default."""
+    v = await store.get_setting(key)
+    return int(v) if v else fallback
+
+
 async def price_text(store: Store, item_id: str) -> str:
     obs = await store.last_observation(item_id)
     if obs is None:
@@ -72,7 +88,12 @@ async def status_text(store: Store) -> str:
     league = await store.get_setting("league") or "(unset)"
     last_poll = await store.get_setting("last_poll_ts") or "(never)"
     top_k = await store.get_setting("top_k") or "8"
-    return f"League: {league}\nLast poll: {last_poll}\nPer-poll alert cap (K): {top_k}"
+    alert_ch = await store.get_setting("alert_channel_id")
+    health_ch = await store.get_setting("health_channel_id")
+    alert_disp = f"<#{alert_ch}>" if alert_ch else "(env default / run /setchannel)"
+    health_disp = f"<#{health_ch}>" if health_ch else "(env default / run /sethealthchannel)"
+    return (f"League: {league}\nLast poll: {last_poll}\nPer-poll alert cap (K): {top_k}\n"
+            f"Alert channel: {alert_disp}\nHealth channel: {health_disp}")
 
 
 def build_bot(store: Store, league_service: LeagueService, settings) -> commands.Bot:
@@ -110,6 +131,18 @@ def build_bot(store: Store, league_service: LeagueService, settings) -> commands
     @bot.tree.command(name="status", description="Show bot status")
     async def status_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(await status_text(store), ephemeral=True)
+
+    @bot.tree.command(name="setchannel", description="Send price/demand alerts to THIS channel")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setchannel_cmd(interaction: discord.Interaction):
+        msg = await set_alert_channel_logic(store, interaction.channel_id)
+        await interaction.response.send_message(msg)
+
+    @bot.tree.command(name="sethealthchannel", description="Send pipeline-health messages to THIS channel")
+    @app_commands.default_permissions(manage_guild=True)
+    async def sethealthchannel_cmd(interaction: discord.Interaction):
+        msg = await set_health_channel_logic(store, interaction.channel_id)
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @bot.tree.command(name="categories", description="Set item categories to scan")
     async def categories_cmd(interaction: discord.Interaction, categories: str):

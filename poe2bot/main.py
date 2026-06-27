@@ -7,7 +7,7 @@ from .config import Settings
 from .store import Store
 from .models import LiquidityTier
 from .sources.poe2scout import Poe2ScoutClient
-from .bot import LeagueService, build_bot
+from .bot import LeagueService, build_bot, resolve_channel_id
 from .scheduler import poll_once
 from .detector.engine import DetectConfig
 from .health import CircuitBreaker, ping_dead_man
@@ -15,14 +15,20 @@ from .alerts import to_embed, overflow_line, format_alert_lines
 from .signals import to_currencies
 
 
-def build_notifier(bot, alert_channel_id: int, health_channel_id: int | None):
+def build_notifier(bot, store, settings):
+    """Resolve the target channel from the DB at SEND time (so /setchannel takes effect
+    immediately, no restart), falling back to the env defaults."""
     async def notify(payload):
         if isinstance(payload, dict) and "health" in payload:
-            ch = bot.get_channel(health_channel_id or alert_channel_id)
+            hid = await resolve_channel_id(store, "health_channel_id", settings.health_channel_id)
+            aid = await resolve_channel_id(store, "alert_channel_id", settings.alert_channel_id)
+            target = hid or aid
+            ch = bot.get_channel(target) if target else None
             if ch is not None:
                 await ch.send(f"⚠️ pipeline health: {payload['health']}")
             return
-        channel = bot.get_channel(alert_channel_id)
+        aid = await resolve_channel_id(store, "alert_channel_id", settings.alert_channel_id)
+        channel = bot.get_channel(aid) if aid else None
         if channel is None:
             return
         if isinstance(payload, dict) and "overflow" in payload:
@@ -39,7 +45,7 @@ async def amain(env: Mapping[str, str]) -> None:
     client = Poe2ScoutClient(session, settings.poe2scout_ua)
     league_service = LeagueService(client)
     bot = build_bot(store, league_service, settings)
-    notify = build_notifier(bot, settings.alert_channel_id, settings.health_channel_id)
+    notify = build_notifier(bot, store, settings)
     breaker = CircuitBreaker()
     cfg = DetectConfig()
 
