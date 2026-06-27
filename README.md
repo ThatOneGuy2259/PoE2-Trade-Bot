@@ -21,6 +21,10 @@ a cold ledger it fires nothing (the detector needs a stored baseline first).
 
 ## Deploy
 
-`docker build -t poe2bot . && docker run -v $PWD/data:/data --env-file .env poe2bot`
+See **[DEPLOY.md](DEPLOY.md)** for a full Docker runbook (Debian/Ubuntu): inviting the bot,
+the env file, a credential-free `--once` smoke test, and run/update/backup commands.
+
+Quick version:
+`docker build -t poe2bot . && docker run -d --name poe2bot --env-file poe2bot.env -v poe2bot-data:/data --restart unless-stopped poe2bot`
 
 or install `deploy/poe2bot.service` with `/etc/poe2bot.env`.
