@@ -2,7 +2,8 @@ import pytest
 from poe2bot.store import Store
 from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_categories_logic,
                          set_threshold_logic, price_text, topmovers_text,
-                         set_alert_channel_logic, set_health_channel_logic, resolve_channel_id)
+                         set_alert_channel_logic, set_health_channel_logic, resolve_channel_id,
+                         ItemService, filter_item_choices, filter_category_choices, CATEGORIES)
 from poe2bot.models import Observation, LiquidityTier
 
 
@@ -90,3 +91,68 @@ async def test_topmovers_empty_during_warmup(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
     assert "no movers" in (await topmovers_text(s, 5)).lower()
     await s.close()
+
+
+# --- autocomplete: items ---------------------------------------------------
+
+class _StubItemClient:
+    def __init__(self, items): self._items = items; self.calls = 0
+    async def get_currency_overview(self, league): self.calls += 1; return {"Items": self._items}
+
+
+async def test_item_service_caches_and_keys_on_league(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    items = [{"ApiId": "divine", "Text": "Divine Orb"},
+             {"ApiId": "exalted", "Text": "Exalted Orb"},
+             {"ApiId": "noname"}]                      # missing Text -> falls back to ApiId
+    c = _StubItemClient(items)
+    svc = ItemService(c, s, ttl_s=100)
+    # no league set -> empty, and no fetch attempted
+    assert await svc.available(now_ts=0) == []
+    assert c.calls == 0
+    await s.set_setting("league", "Standard")
+    pairs = await svc.available(now_ts=0)
+    assert ("Divine Orb", "divine") in pairs
+    assert ("noname", "noname") in pairs               # Text fallback -> ApiId
+    assert c.calls == 1
+    await svc.available(now_ts=50)                      # within ttl -> cached
+    assert c.calls == 1
+    await svc.available(now_ts=200)                     # ttl expired -> refetch
+    assert c.calls == 2
+    await s.set_setting("league", "Hardcore")          # league change -> refetch even in ttl
+    await svc.available(now_ts=210)
+    assert c.calls == 3
+    await s.close()
+
+
+def test_filter_item_choices():
+    pairs = [("Divine Orb", "divine"), ("Exalted Orb", "exalted"), ("Fancy", "xyz")]
+    assert filter_item_choices(pairs, "div") == [("Divine Orb", "divine")]      # name match
+    assert filter_item_choices(pairs, "xyz") == [("Fancy", "xyz")]              # id match
+    assert filter_item_choices(pairs, "ORB") == [("Divine Orb", "divine"),
+                                                 ("Exalted Orb", "exalted")]    # case-insensitive
+    assert filter_item_choices(pairs, "") == pairs                             # empty -> all
+    many = [(f"Item {i}", f"id{i}") for i in range(40)]
+    assert len(filter_item_choices(many, "item")) == 25                        # capped at 25
+
+
+# --- autocomplete: categories (preset, comma-aware) ------------------------
+
+def test_categories_constant_shape():
+    ids = {api_id for api_id, _ in CATEGORIES}
+    assert {"currency", "fragments", "runes", "essences"} <= ids
+    assert all(isinstance(a, str) and isinstance(l, str) for a, l in CATEGORIES)
+
+
+def test_filter_category_choices():
+    # single token: matches api_id or label, case-insensitive
+    opts = filter_category_choices("frag")
+    assert opts == [("fragments", "fragments")]
+    assert filter_category_choices("Soul") == [("ultimatum", "ultimatum")]      # label match
+    assert filter_category_choices("") == [(a, a) for a, _ in CATEGORIES]        # all, value=id
+    # comma list: completes the LAST token, preserves earlier ones, skips chosen
+    opts = filter_category_choices("currency,fr")
+    assert ("currency,fragments", "currency,fragments") in opts
+    assert all(not v.endswith(",currency") for _, v in opts)                     # 'currency' excluded
+    assert filter_category_choices("currency,fragments,").count(("currency,fragments,currency",
+                                                                 "currency,fragments,currency")) == 0
