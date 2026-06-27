@@ -1,0 +1,13 @@
+[Unit]
+Description=PoE2 Trade Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/poe2bot.env
+ExecStart=/usr/bin/python -m poe2bot.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
