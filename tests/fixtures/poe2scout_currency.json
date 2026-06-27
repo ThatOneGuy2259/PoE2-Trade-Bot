@@ -1,0 +1,5 @@
+{"epoch": 1782000000,
+ "items": [
+   {"apiId": "divine", "name": "Divine Orb", "currentPrice": 1.0, "currentQuantity": 1500, "tradeId": "divine"},
+   {"apiId": "exalted", "name": "Exalted Orb", "currentPrice": 0.004, "currentQuantity": 40, "tradeId": "exalted"}
+ ]}
