@@ -3,7 +3,8 @@ from poe2bot.store import Store
 from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_categories_logic,
                          set_threshold_logic, price_text, topmovers_text,
                          set_alert_channel_logic, set_health_channel_logic, resolve_channel_id,
-                         ItemService, filter_item_choices, filter_category_choices, CATEGORIES)
+                         ItemService, filter_item_choices, filter_category_choices, CATEGORIES,
+                         sync_target_guilds)
 from poe2bot.models import Observation, LiquidityTier
 
 
@@ -139,6 +140,15 @@ def test_filter_item_choices():
 
 
 # --- autocomplete: categories (preset, comma-aware) ------------------------
+
+def test_sync_target_guilds():
+    # explicit DISCORD_GUILD_ID wins, ignoring joined list
+    assert sync_target_guilds(999, [1, 2]) == [999]
+    # unset -> every joined guild (auto-detect, no config needed)
+    assert sync_target_guilds(None, [1, 2]) == [1, 2]
+    # unset and not in any guild -> empty (caller falls back to a global sync)
+    assert sync_target_guilds(None, []) == []
+
 
 def test_categories_constant_shape():
     ids = {api_id for api_id, _ in CATEGORIES}

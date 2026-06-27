@@ -50,6 +50,7 @@ The **only required** value is the token:
 DISCORD_TOKEN=<paste your bot token here, on the server only>
 ALERT_CHANNEL_ID=<optional — or leave blank and set it live with /setchannel>
 HEALTH_CHANNEL_ID=<optional>
+DISCORD_GUILD_ID=<optional — pin instant command sync to one server; blank = auto-detect>
 POLL_INTERVAL_MIN=30
 POE2SCOUT_UA=poe2bot/0.1 (contact: you@example.com)
 DB_PATH=/data/poe2bot.db
@@ -91,9 +92,11 @@ The named volume `poe2bot-data` keeps your SQLite ledger across restarts/updates
 3. `/status` — shows league, last poll, alert cap, and the current alert/health channels.
 4. `/price divine` — shows the price in Exalted / Divine / Chaos.
 
-> First-time note: **global slash commands can take up to ~1 hour to appear** after the
-> bot first starts (a Discord propagation limit, not a bug). If you want them instantly,
-> ask me to add a `DISCORD_GUILD_ID` option that syncs commands to your server immediately.
+> First-time note: the bot **auto-syncs its slash commands to every server it's in on
+> startup**, so they appear within seconds — no `DISCORD_GUILD_ID` needed. (If you'd rather
+> pin to one specific server, set `DISCORD_GUILD_ID=<your server ID>` in the env file.) Only
+> if the bot is in *no* server at startup does it fall back to global sync, which Discord can
+> take up to ~1h to propagate.
 
 Alerts begin once the ledger has built a baseline (a few hours of polling).
 

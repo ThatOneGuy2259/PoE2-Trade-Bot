@@ -12,6 +12,8 @@ class Settings:
     poll_interval_min: int
     poe2scout_ua: str
     dead_man_url: str | None
+    discord_guild_id: int | None    # optional: sync slash commands to this guild for instant
+                                    # propagation; blank/absent -> auto-detect joined guilds
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Settings":
@@ -22,6 +24,7 @@ class Settings:
             raise ValueError(f"missing required env vars: {', '.join(missing)}")
         alert = env.get("ALERT_CHANNEL_ID")
         health = env.get("HEALTH_CHANNEL_ID")
+        guild = env.get("DISCORD_GUILD_ID")
         return cls(
             discord_token=env["DISCORD_TOKEN"],
             alert_channel_id=int(alert) if alert else None,
@@ -30,4 +33,5 @@ class Settings:
             poll_interval_min=int(env.get("POLL_INTERVAL_MIN", "30")),
             poe2scout_ua=env.get("POE2SCOUT_UA", "poe2bot/0.1 (contact: unset)"),
             dead_man_url=env.get("DEAD_MAN_URL") or None,
+            discord_guild_id=int(guild) if guild else None,
         )

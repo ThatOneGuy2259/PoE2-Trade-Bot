@@ -16,3 +16,10 @@ def test_from_env_missing_required():
         Settings.from_env({})
     assert "DISCORD_TOKEN" in str(e.value)
     assert "ALERT_CHANNEL_ID" not in str(e.value)   # no longer required
+
+
+def test_guild_id_optional_and_parsed():
+    # absent or blank -> None (auto-detect mode); set -> int (explicit instant sync)
+    assert Settings.from_env({"DISCORD_TOKEN": "t"}).discord_guild_id is None
+    assert Settings.from_env({"DISCORD_TOKEN": "t", "DISCORD_GUILD_ID": ""}).discord_guild_id is None
+    assert Settings.from_env({"DISCORD_TOKEN": "t", "DISCORD_GUILD_ID": "123"}).discord_guild_id == 123

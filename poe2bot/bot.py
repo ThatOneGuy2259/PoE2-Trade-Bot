@@ -79,6 +79,15 @@ class ItemService:
         return self._cache
 
 
+def sync_target_guilds(guild_id: int | None, joined_guild_ids: list[int]) -> list[int]:
+    """Which guilds get instant slash-command sync: the explicit DISCORD_GUILD_ID if set,
+    else every guild the bot has joined (auto, no config). Empty -> caller does a global
+    sync (the ~1h-propagation default)."""
+    if guild_id:
+        return [guild_id]
+    return list(joined_guild_ids)
+
+
 def filter_item_choices(pairs: list[tuple[str, str]], current: str,
                         limit: int = 25) -> list[tuple[str, str]]:
     """Substring-match (case-insensitive) `current` against each item's name OR api_id.
@@ -186,7 +195,23 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
 
     @bot.event
     async def on_ready():
-        await bot.tree.sync()
+        # Guild-scoped command sync propagates instantly (vs. up to ~1h for global). Target
+        # the explicit DISCORD_GUILD_ID, else auto-detect every joined guild. After pushing
+        # to guilds, clear the global copies so commands don't show twice (global + guild).
+        guild_id = getattr(settings, "discord_guild_id", None) if settings else None
+        targets = sync_target_guilds(guild_id, [g.id for g in bot.guilds])
+        if targets:
+            for gid in targets:
+                g = discord.Object(id=gid)
+                try:
+                    bot.tree.copy_global_to(guild=g)
+                    await bot.tree.sync(guild=g)
+                except discord.HTTPException:
+                    pass        # wrong id or missing access — skip, don't crash startup
+            bot.tree.clear_commands(guild=None)
+            await bot.tree.sync()
+        else:
+            await bot.tree.sync()
         # Best-effort cache pre-warm so the first /price autocomplete is already hot.
         try:
             await item_service.available(int(time.time()))
