@@ -154,7 +154,24 @@ async def setleague_logic(store: Store, leagues: list[str], chosen: str) -> str:
     if chosen not in leagues:
         raise ValueError(f"'{chosen}' is not in the current league list")
     await store.set_setting("league", chosen)
-    return f"League set to **{chosen}**."
+    return f"League set to **{chosen}**. Run **/pollnow** to fetch immediately (otherwise the next scheduled poll picks it up)."
+
+
+async def pollnow_logic(store: Store, poll_now) -> str:
+    """Trigger one immediate poll via the injected `poll_now` coroutine (returns the alert
+    count, or -1 if the source was down). No-ops with a hint when no league is set, so we
+    never fire a pointless empty poll."""
+    league = await store.get_setting("league")
+    if not league:
+        return "⚠️ No league set — run **/setleague** first, then /pollnow."
+    n = await poll_now()
+    if n < 0:
+        return "⚠️ poe2scout fetch failed (source down). Try again shortly."
+    row = await (await store._db.execute(
+        "SELECT COUNT(*) c FROM obs WHERE src_ts=(SELECT MAX(src_ts) FROM obs)")).fetchone()
+    items = row["c"] if row else 0
+    return (f"✅ Polled **{league}** — {items} item(s) ingested, {n} alert(s) fired. "
+            f"(a cold ledger fires 0 until a baseline builds over the next few polls)")
 
 
 async def set_categories_logic(store: Store, categories: list[str]) -> str:
@@ -221,7 +238,7 @@ async def status_text(store: Store) -> str:
 
 
 def build_bot(store: Store, league_service: LeagueService, item_service: ItemService,
-              settings) -> commands.Bot:
+              settings, poll_now=None) -> commands.Bot:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -286,6 +303,22 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
     @bot.tree.command(name="status", description="Show bot status")
     async def status_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(await status_text(store), ephemeral=True)
+
+    @bot.tree.command(name="pollnow", description="Poll poe2scout right now (don't wait for the 30-min timer)")
+    @app_commands.default_permissions(manage_guild=True)
+    async def pollnow_cmd(interaction: discord.Interaction):
+        if poll_now is None:
+            await interaction.response.send_message(
+                "⚠️ Manual polling isn't wired in this process.", ephemeral=True)
+            return
+        # A poll makes several HTTP calls, so ack first (3s limit) then follow up.
+        await interaction.response.defer(ephemeral=True)
+        try:
+            msg = await pollnow_logic(store, poll_now)
+        except Exception as e:
+            log.warning("/pollnow failed: %s", e)
+            msg = "⚠️ Poll errored — check the logs."
+        await interaction.followup.send(msg, ephemeral=True)
 
     @bot.tree.command(name="setchannel", description="Send price/demand alerts to THIS channel")
     @app_commands.default_permissions(manage_guild=True)

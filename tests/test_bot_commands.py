@@ -5,7 +5,7 @@ from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_catego
                          set_threshold_logic, price_text, topmovers_text,
                          set_alert_channel_logic, set_health_channel_logic, resolve_channel_id,
                          ItemService, filter_item_choices, filter_category_choices, CATEGORIES,
-                         sync_target_guilds, sync_commands)
+                         sync_target_guilds, sync_commands, pollnow_logic)
 from poe2bot.models import Observation, LiquidityTier
 
 
@@ -53,9 +53,48 @@ async def test_setleague_validates(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
     msg = await setleague_logic(s, ["Rise of the Abyssal", "Standard"], "Standard")
     assert "Standard" in msg
+    assert "/pollnow" in msg                      # nudge the user to fetch immediately
     assert await s.get_setting("league") == "Standard"
     with pytest.raises(ValueError):
         await setleague_logic(s, ["Standard"], "Nonexistent League")
+    await s.close()
+
+
+async def test_pollnow_logic_no_league(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    calls = []
+    async def poll_now(): calls.append(1); return 0
+    msg = await pollnow_logic(s, poll_now)
+    assert "setleague" in msg.lower()
+    assert calls == []                            # must NOT poll when no league is set
+    await s.close()
+
+
+async def test_pollnow_logic_source_down(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "Runes of Aldur")
+    async def poll_now(): return -1               # poll_once returns -1 on source failure
+    msg = await pollnow_logic(s, poll_now)
+    assert "failed" in msg.lower()
+    await s.close()
+
+
+async def test_pollnow_logic_success_reports_counts(tmp_path):
+    import math
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "Runes of Aldur")
+    # simulate a poll that ingested 2 items at the latest src_ts and fired 1 alert
+    async def poll_now():
+        for iid in ("divine", "exalted"):
+            await s.insert_observation(Observation(
+                item_id=iid, league_id="L", src_ts=100, wall_ts=100, name=iid,
+                category="currency", is_currency_pair=True, log_price=math.log(2.0),
+                price_exalt=2.0, volume=1.0, vol_daily=None, stock=None, doi=None,
+                liq_tier=LiquidityTier.HIGH, trade_id=None, valid=True))
+        return 1
+    msg = await pollnow_logic(s, poll_now)
+    assert "Runes of Aldur" in msg
+    assert "2" in msg and "1" in msg              # 2 items ingested, 1 alert fired
     await s.close()
 
 async def test_status_text(tmp_path):

@@ -89,8 +89,10 @@ The named volume `poe2bot-data` keeps your SQLite ledger across restarts/updates
    there. To move rooms later, just run `/setchannel` in the new room; no restart needed.
    (Optionally `/sethealthchannel` for the pipeline-health messages.)
 2. `/setleague` — autocompletes from the live league list; pick the current league.
-3. `/status` — shows league, last poll, alert cap, and the current alert/health channels.
-4. `/price divine` — shows the price in Exalted / Divine / Chaos.
+3. `/pollnow` (admin) — fetch immediately instead of waiting for the timer; reports how many
+   items were ingested. The bot also polls once automatically on startup.
+4. `/status` — shows league, last poll, alert cap, and the current alert/health channels.
+5. `/price divine` — shows the price in Exalted / Divine / Chaos.
 
 > First-time note: the bot **auto-syncs its slash commands to every server it's in on
 > startup**, so they appear within seconds — no `DISCORD_GUILD_ID` needed. (If you'd rather

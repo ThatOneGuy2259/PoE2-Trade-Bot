@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, os, sys, time
+from datetime import datetime
 from collections.abc import Mapping
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -45,21 +46,30 @@ async def amain(env: Mapping[str, str]) -> None:
     client = Poe2ScoutClient(session, settings.poe2scout_ua)
     league_service = LeagueService(client)
     item_service = ItemService(client, store)
-    bot = build_bot(store, league_service, item_service, settings)
-    notify = build_notifier(bot, store, settings)
     breaker = CircuitBreaker()
     cfg = DetectConfig()
+
+    # run_poll is defined before build_bot so /pollnow can trigger it on demand. It closes
+    # over `notify` (assigned just below) by name — resolved at call time, never at startup.
+    async def run_poll() -> int:
+        return await poll_once(store, client, cfg, int(time.time()), breaker, notify)
+
+    bot = build_bot(store, league_service, item_service, settings, run_poll)
+    notify = build_notifier(bot, store, settings)
 
     scheduler = AsyncIOScheduler()
 
     async def poll_job():
-        await poll_once(store, client, cfg, int(time.time()), breaker, notify)
+        await run_poll()
         await ping_dead_man(session, settings.dead_man_url)
 
     async def prune_job():
         await store.prune(int(time.time()))
 
-    scheduler.add_job(poll_job, "interval", minutes=settings.poll_interval_min)
+    # next_run_time=now -> poll immediately at startup instead of waiting one full interval,
+    # so a freshly-started (or freshly-redeployed) bot isn't silent for up to 30 minutes.
+    scheduler.add_job(poll_job, "interval", minutes=settings.poll_interval_min,
+                      next_run_time=datetime.now())
     scheduler.add_job(prune_job, "interval", hours=24)
     scheduler.start()
     try:
