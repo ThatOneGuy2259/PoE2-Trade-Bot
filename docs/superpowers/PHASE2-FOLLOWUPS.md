@@ -13,8 +13,13 @@ all are improvements to make once real data exists.
   larger price move (and vice versa). Normalize to a common scale before ranking.
 - **`evaluate_demand` has no `min_samples` gate** (only the ≥10 trades/day floor), so it
   can fire off a 1–2 sample baseline early in warmup. Add a sample-count gate.
-- **Freshness compares wall-clock `now_ts` to server `obs.src_ts`** (gating.py). Verify
-  empirically that poe2scout `epoch` is recent Unix seconds before trusting the gate.
+- **No per-snapshot timestamp from poe2scout** (confirmed live: the Currencies response
+  has no `epoch`; only daily `PriceLogs[].Time`). Phase 1 therefore uses the bot's own
+  fetch time as `src_ts`, so every poll stores a row per item even when the price is
+  unchanged (oversampling). Harmless for the frozen-reference Phase-1 detector, but
+  Phase-2's MAD/CUSUM will need content-based dedup (skip storing unchanged values) —
+  and that dedup must NOT break 2-of-3 persistence, which re-evaluates the same elevated
+  price across polls.
 - **`prune` only trims `obs`.** `alert_log`, `demfire:`/`pend:` setting keys, and the
   `basket`/`daily_rollup` tables (when added) grow unbounded — extend pruning.
 - **Early-league `started_at` is a proxy:** bootstrapped from first-poll time, not the

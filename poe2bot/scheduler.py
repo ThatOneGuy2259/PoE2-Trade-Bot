@@ -4,18 +4,6 @@ from .sources.normalize import normalize_currency
 from .detector.engine import detect, DetectConfig
 
 
-def extract_src_ts(raw: dict) -> int:
-    return int(raw.get("epoch", 0))
-
-
-def extract_anchor(raw: dict) -> Anchor:
-    for it in raw.get("items", []):
-        if it.get("apiId") == "divine" and it.get("currentPrice"):
-            # currentPrice is in Exalted-equiv units in this overview
-            return Anchor(divine_exalt=float(it["currentPrice"]) or 1.0, chaos_divine=1.0)
-    return Anchor(divine_exalt=1.0, chaos_divine=1.0)
-
-
 def _clamp_anchor(new_divine: float, prev_divine: float | None, cap: float = 3.0) -> float:
     if prev_divine and prev_divine > 0:
         ratio = new_divine / prev_divine
@@ -25,24 +13,29 @@ def _clamp_anchor(new_divine: float, prev_divine: float | None, cap: float = 3.0
 
 
 async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, notify) -> int:
+    """Run one poll cycle against poe2scout.
+
+    The poe2scout currency response carries NO per-snapshot timestamp, so the bot's own
+    fetch time (`now_ts`) is used as the observation `src_ts`. The league's `DivinePrice`
+    (Exalted per Divine) is the anchor. Each poll is processed (there is no server epoch
+    to dedup on); the `(item_id, src_ts)` primary key still prevents double-insert within
+    a single poll.
+    """
     league = await store.get_setting("league")
     if not league:
         return 0
     try:
         raw = await client.get_currency_overview(league)
+        meta = await client.get_league_meta(league)
     except Exception:
         if breaker.record_failure():
             await notify({"health": "source_down"})
         return -1
-    src_ts = extract_src_ts(raw)
-    last = await store.get_setting("last_poll_ts")
-    if last is not None and int(last) == src_ts:
-        breaker.record_success()
-        return 0
-    raw_anchor = extract_anchor(raw)
+    raw_divine = float(meta["DivinePrice"]) if meta and meta.get("DivinePrice") else 1.0
+    raw_chaos = float(meta["ChaosDivinePrice"]) if meta and meta.get("ChaosDivinePrice") else 1.0
     prev_div = await store.get_setting("anchor_divine")
-    divine = _clamp_anchor(raw_anchor.divine_exalt, float(prev_div) if prev_div else None)
-    anchor = Anchor(divine_exalt=divine, chaos_divine=raw_anchor.chaos_divine)
+    divine = _clamp_anchor(raw_divine, float(prev_div) if prev_div else None)
+    anchor = Anchor(divine_exalt=divine, chaos_divine=raw_chaos)
     await store.set_setting("anchor_divine", str(divine))
     started = await store.get_league_started_at(league)
     if started == 0:
@@ -51,13 +44,12 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
         await store.upsert_league(league, league, league, now_ts, anchor.divine_exalt, anchor.chaos_divine)
         await store.set_active_league(league)
         started = now_ts
-    league_started_at = started
-    obs = normalize_currency(raw, league, anchor, src_ts)
-    kept, overflow = await detect(store, obs, anchor, league_started_at, now_ts, cfg)
+    obs = normalize_currency(raw, league, anchor, now_ts)
+    kept, overflow = await detect(store, obs, anchor, started, now_ts, cfg)
     for ev in kept:
         await notify(ev)
     if overflow > 0:
         await notify({"overflow": overflow})
-    await store.set_setting("last_poll_ts", str(src_ts))
+    await store.set_setting("last_poll_ts", str(now_ts))
     breaker.record_success()
     return len(kept)

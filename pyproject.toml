@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
   "discord.py>=2.3,<3",
   "aiohttp>=3.9",
+  "yarl>=1.9",
   "aiosqlite>=0.19",
   "APScheduler>=3.10,<4",
 ]

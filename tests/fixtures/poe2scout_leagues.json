@@ -1,1 +1,4 @@
-[{"value": "Rise of the Abyssal"}, {"value": "Standard"}]
+[
+  {"Value": "Rise of the Abyssal", "ShortName": "abyssal", "IsCurrent": true, "DivinePrice": 250.0, "ChaosDivinePrice": 1.0},
+  {"Value": "Standard", "ShortName": "standard", "IsCurrent": false, "DivinePrice": 200.0, "ChaosDivinePrice": 1.0}
+]

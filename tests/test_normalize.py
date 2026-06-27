@@ -21,6 +21,8 @@ def test_normalize_currency_maps_fields():
     assert abs(divine.log_price) < 1e-9
     assert divine.liq_tier == LiquidityTier.HIGH      # qty 1500
     assert divine.is_currency_pair is True
+    assert divine.name == "Divine Orb"                # name comes from the Text field
+    assert divine.trade_id is None                    # currency items have no trade id
     assert by_id["exalted"].liq_tier == LiquidityTier.LOW   # qty 40
-    # currentPrice read in its own unit, never inverted (0.004 stays 0.004)
+    # CurrentPrice read in its own unit, never inverted (0.004 stays 0.004)
     assert by_id["exalted"].price_exalt == 0.004
