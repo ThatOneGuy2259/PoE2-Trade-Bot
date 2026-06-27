@@ -2,7 +2,7 @@ from poe2bot.models import LiquidityTier, Observation, AlertEvent
 
 
 def test_tier_gate():
-    assert LiquidityTier.LOW.gate == 0.0
+    assert LiquidityTier.LOW.gate == 0.3       # discounted but non-zero (rare items still scored)
     assert LiquidityTier.MED.gate == 0.6
     assert LiquidityTier.HIGH.gate == 1.0
 

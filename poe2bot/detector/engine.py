@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from ..models import Observation, AlertEvent, Anchor, LiquidityTier
-from ..signals import median, pct_from_log, wfs_phase1, relative_drop
+from ..signals import median, pct_from_log, wfs_phase1, relative_drop, to_currencies
 from .gating import QualityConfig, hard_block_reason, has_min_samples, in_early_league
 
 @dataclass(frozen=True)
@@ -10,10 +10,11 @@ class DetectConfig:
     cheap_floor_pct: float = 0.25
     cheap_price: float = 2.0
     fast_path_log: float = 0.40
+    low_liq_floor: float = 0.40      # LOW-liquidity items need a much bigger move to fire
     cooldown_s: int = 21600
     top_k: int = 8
     demand_drop: float = 0.50
-    demand_min_trades_day: float = 10.0
+    demand_min_volume: float = 5000.0  # daily-volume floor below which demand is too noisy
     quality: QualityConfig = field(default_factory=QualityConfig)
 
 @dataclass(frozen=True)
@@ -25,7 +26,7 @@ class PriceVerdict:
 
 def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: list[float],
                    last_fire_up_ts: int, last_fire_dn_ts: int, now_ts: int,
-                   divine_exalt: float, cfg: DetectConfig,
+                   anchor: Anchor, cfg: DetectConfig,
                    early_league: bool = False) -> PriceVerdict:
     if mu_frozen is not None:
         reference = mu_frozen
@@ -35,8 +36,16 @@ def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: lis
         reference = obs.log_price
     log_move = obs.log_price - reference
     move = pct_from_log(obs.log_price, reference)
-    floor = cfg.cheap_floor_pct if obs.price_exalt < cfg.cheap_price else cfg.floor_pct
-    fast = abs(log_move) >= cfg.fast_path_log
+    is_low = obs.liq_tier == LiquidityTier.LOW
+    if is_low:
+        floor = cfg.low_liq_floor                          # thin markets need a much bigger move
+    elif obs.price_exalt < cfg.cheap_price:
+        floor = cfg.cheap_floor_pct
+    else:
+        floor = cfg.floor_pct
+    # LOW-liquidity moves never immediate-fire: a big move on a thin item can be one odd
+    # listing, so it must still clear the 2-of-3 confirmation downstream.
+    fast = abs(log_move) >= cfg.fast_path_log and not is_low
     fires = fast or abs(move) >= floor
     if not fires:
         return PriceVerdict(None, None, None)
@@ -47,28 +56,34 @@ def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: lis
     if last_fire and (now_ts - last_fire) < cfg.cooldown_s:
         return PriceVerdict(None, None, "cooldown")
     cls = "JUMP" if direction == "up" else "CRASH"
-    wfs = wfs_phase1(obs.price_exalt, obs.liq_tier.gate, divine_exalt, obs.volume or 0.0)
+    wfs = wfs_phase1(obs.price_exalt, obs.liq_tier.gate, anchor.divine_exalt, obs.volume or 0.0)
+    px, pdiv, pchaos = to_currencies(obs.price_exalt, anchor.divine_exalt, anchor.chaos_divine)
     event = AlertEvent(item_id=obs.item_id, name=obs.name, cls=cls, direction=direction,
                        magnitude=log_move, pct_move=move, baseline=reference,
                        current=obs.log_price, severity=abs(log_move), liq_tier=obs.liq_tier,
-                       trade_id=obs.trade_id, wfs=wfs)
+                       trade_id=obs.trade_id, wfs=wfs, price_exalt=px, price_div=pdiv,
+                       price_chaos=pchaos, low_confidence=is_low)
     return PriceVerdict(event, obs.log_price, None, fast_path=fast)
 
 
 def evaluate_demand(obs: Observation, volume_baseline: list[float],
-                    early_league: bool, cfg: DetectConfig) -> AlertEvent | None:
+                    early_league: bool, cfg: DetectConfig,
+                    anchor: Anchor | None = None) -> AlertEvent | None:
     if early_league or obs.volume is None or not volume_baseline:
         return None
     base = median(volume_baseline)
-    if base < cfg.demand_min_trades_day:
+    if base < cfg.demand_min_volume:           # too thin for the demand signal to be trustworthy
         return None
     drop = relative_drop(obs.volume, base)
     if drop < cfg.demand_drop:
         return None
+    a = anchor or Anchor(1.0, 1.0)
+    px, pdiv, pchaos = to_currencies(obs.price_exalt, a.divine_exalt, a.chaos_divine)
     return AlertEvent(item_id=obs.item_id, name=obs.name, cls="DEMAND_COLLAPSE",
                       direction="down", magnitude=-drop, pct_move=-drop, baseline=base,
                       current=obs.volume, severity=drop, liq_tier=obs.liq_tier,
-                      trade_id=obs.trade_id, wfs=0.0)
+                      trade_id=obs.trade_id, wfs=0.0, price_exalt=px, price_div=pdiv,
+                      price_chaos=pchaos, low_confidence=(obs.liq_tier == LiquidityTier.LOW))
 
 
 def _suppressed(obs: Observation) -> AlertEvent:
@@ -111,7 +126,7 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
             continue
         st = await store.get_detector_state(obs.item_id)
         verdict = evaluate_price(obs, st["mu_frozen"], baseline_logs, st["last_fire_up_ts"],
-                                 st["last_fire_dn_ts"], now_ts, anchor.divine_exalt, cfg,
+                                 st["last_fire_dn_ts"], now_ts, anchor, cfg,
                                  early_league=early)
         if verdict.event is not None:
             ev = verdict.event
@@ -138,7 +153,7 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
             await _reset_pending(store, obs.item_id, "up")
             await _reset_pending(store, obs.item_id, "down")
         vol_base = await store.volume_window(obs.item_id, obs.src_ts - 48 * 3600)
-        dem = evaluate_demand(obs, vol_base, early, cfg)
+        dem = evaluate_demand(obs, vol_base, early, cfg, anchor)
         if dem is not None:
             last_dem = int(await store.get_setting(f"demfire:{obs.item_id}") or "0")
             if not last_dem or (now_ts - last_dem) >= cfg.cooldown_s:

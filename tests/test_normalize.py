@@ -6,10 +6,11 @@ from poe2bot.sources.normalize import normalize_currency, tier_from_volume
 FIX = Path(__file__).parent / "fixtures"
 
 def test_tier_from_volume():
+    # thresholds are for DAILY volume: LOW <5k, MED 5k-100k, HIGH >=100k
     assert tier_from_volume(None) == LiquidityTier.LOW
-    assert tier_from_volume(50) == LiquidityTier.LOW
-    assert tier_from_volume(500) == LiquidityTier.MED
-    assert tier_from_volume(5000) == LiquidityTier.HIGH
+    assert tier_from_volume(4000) == LiquidityTier.LOW
+    assert tier_from_volume(50000) == LiquidityTier.MED
+    assert tier_from_volume(200000) == LiquidityTier.HIGH
 
 def test_normalize_currency_maps_fields():
     raw = json.loads((FIX / "poe2scout_currency.json").read_text())
@@ -19,10 +20,12 @@ def test_normalize_currency_maps_fields():
     divine = by_id["divine"]
     assert divine.price_exalt == 1.0
     assert abs(divine.log_price) < 1e-9
-    assert divine.liq_tier == LiquidityTier.HIGH      # qty 1500
+    assert divine.liq_tier == LiquidityTier.HIGH      # daily volume 200000 -> HIGH
+    assert divine.volume == 200000.0                  # volume from PriceLogs (daily), not snapshot
+    assert divine.stock == 1500.0                     # snapshot CurrentQuantity kept as stock
     assert divine.is_currency_pair is True
     assert divine.name == "Divine Orb"                # name comes from the Text field
     assert divine.trade_id is None                    # currency items have no trade id
-    assert by_id["exalted"].liq_tier == LiquidityTier.LOW   # qty 40
+    assert by_id["exalted"].liq_tier == LiquidityTier.LOW   # daily volume 40 -> LOW
     # CurrentPrice read in its own unit, never inverted (0.004 stays 0.004)
     assert by_id["exalted"].price_exalt == 0.004

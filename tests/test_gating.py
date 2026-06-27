@@ -13,10 +13,11 @@ def test_is_fresh():
     assert is_fresh(1000, 1000, now_ts=1000, max_age_s=10800) is False   # unchanged ts
     assert is_fresh(1000, 900, now_ts=1000 + 99999, max_age_s=10800) is False  # too old
 
-def test_hard_block_low_liquidity():
+def test_low_liquidity_not_hard_blocked():
+    # LOW liquidity is no longer hard-blocked — rare items are watched (with caution) instead.
     cfg = QualityConfig()
     r = hard_block_reason(_obs(tier=LiquidityTier.LOW), prev_src_ts=900, now_ts=1000, cfg=cfg)
-    assert r == "low_liquidity"
+    assert r is None
 
 def test_hard_block_stale_and_invalid():
     cfg = QualityConfig()

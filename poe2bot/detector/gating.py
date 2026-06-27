@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from ..models import Observation, LiquidityTier
+from ..models import Observation
 
 
 @dataclass(frozen=True)
@@ -26,11 +26,14 @@ def has_min_samples(n_samples: int, cfg: QualityConfig) -> bool:
 
 def hard_block_reason(obs: Observation, prev_src_ts: int | None, now_ts: int,
                       cfg: QualityConfig) -> str | None:
-    """Always-on gate: blocks every fire including the fast-path. No sample-count check."""
+    """Always-on gate: blocks every fire including the fast-path. No sample-count check.
+
+    Note: LOW liquidity is NOT hard-blocked. Rare-but-valuable items (e.g. Mirror) are
+    still watched, but the detector requires a larger move for them and flags the alert
+    low-confidence (see evaluate_price). Only invalid/stale data is blocked outright.
+    """
     if not obs.valid or obs.gap:
         return "invalid_or_gap"
     if not is_fresh(obs.src_ts, prev_src_ts, now_ts, cfg.max_age_s):
         return "stale"
-    if obs.liq_tier == LiquidityTier.LOW:
-        return "low_liquidity"
     return None

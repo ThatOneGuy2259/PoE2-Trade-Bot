@@ -11,6 +11,15 @@ all are improvements to make once real data exists.
 - **Top-K severity mixes units:** price `severity = abs(log_move)` vs demand
   `severity = drop` (0–1) are sorted in one list, so a large demand drop can outrank a
   larger price move (and vice versa). Normalize to a common scale before ranking.
+- **Volume-field semantics now partly resolved:** the bot tiers liquidity and judges
+  demand on the daily `PriceLogs[].Quantity` series (real activity), and keeps the live
+  `CurrentQuantity` snapshot as `stock` for future supply-vs-flow analysis. The *exact*
+  meaning of `PriceLogs.Quantity` is still not formally documented (~900/day for Mirror
+  seems high for literal trades — it may be a listings/observation count), so the LOW/MED/
+  HIGH thresholds (5k/100k) are calibrated empirically against the live distribution, not
+  from spec. Confirm the field's true unit before trusting the absolute thresholds, and
+  add proper count-noise (Poisson/NegBin) gating for thin markets instead of the flat
+  `demand_min_volume` floor.
 - **`evaluate_demand` has no `min_samples` gate** (only the ≥10 trades/day floor), so it
   can fire off a 1–2 sample baseline early in warmup. Add a sample-count gate.
 - **No per-snapshot timestamp from poe2scout** (confirmed live: the Currencies response

@@ -17,8 +17,10 @@ class _SeqClient:
         p = self._prices[min(self._i, len(self._prices) - 1)]
         self._i += 1
         return {"CurrentPage": 1, "Pages": 1, "Total": 1,
-                "Items": [{"ApiId": "divine", "Text": "Divine Orb",
-                           "CurrentPrice": p, "CurrentQuantity": 1500}]}
+                "Items": [{"ApiId": "divine", "Text": "Divine Orb", "CurrentPrice": p,
+                           "CurrentQuantity": 1500,
+                           "PriceLogs": [{"Price": p, "Time": "2026-06-27T00:00:00",
+                                          "Quantity": 200000}]}]}   # HIGH daily volume
 
     async def get_league_meta(self, league):
         return {"DivinePrice": 250.0, "ChaosDivinePrice": 1.0}

@@ -1,7 +1,7 @@
 {"CurrentPage": 1, "Pages": 1, "Total": 2,
  "Items": [
    {"ApiId": "divine", "Text": "Divine Orb", "CurrentPrice": 1.0, "CurrentQuantity": 1500,
-    "PriceLogs": [{"Price": 1.0, "Time": "2026-06-27T00:00:00", "Quantity": 1500}]},
+    "PriceLogs": [{"Price": 1.0, "Time": "2026-06-27T00:00:00", "Quantity": 200000}]},
    {"ApiId": "exalted", "Text": "Exalted Orb", "CurrentPrice": 0.004, "CurrentQuantity": 40,
     "PriceLogs": [{"Price": 0.004, "Time": "2026-06-27T00:00:00", "Quantity": 40}]}
  ]}

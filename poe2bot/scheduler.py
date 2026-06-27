@@ -37,6 +37,7 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
     divine = _clamp_anchor(raw_divine, float(prev_div) if prev_div else None)
     anchor = Anchor(divine_exalt=divine, chaos_divine=raw_chaos)
     await store.set_setting("anchor_divine", str(divine))
+    await store.set_setting("anchor_chaos_divine", str(raw_chaos))
     started = await store.get_league_started_at(league)
     if started == 0:
         # bootstrap once (persisted) so the early-league mute has a real anchor;

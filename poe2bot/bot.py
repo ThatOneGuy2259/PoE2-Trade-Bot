@@ -4,7 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from .store import Store
 from .sources.poe2scout import Poe2ScoutClient
-from .signals import wfs_phase1
+from .signals import wfs_phase1, to_currencies
 
 
 class LeagueService:
@@ -46,11 +46,14 @@ async def price_text(store: Store, item_id: str) -> str:
     obs = await store.last_observation(item_id)
     if obs is None:
         return f"No data for `{item_id}` yet."
-    divine = 1.0  # WFS rebasing uses the league anchor in the scheduler; /price shows raw tier+price
+    divine = float(await store.get_setting("anchor_divine") or "1.0")
+    chaos_divine = float(await store.get_setting("anchor_chaos_divine") or "1.0")
+    px, pdiv, pchaos = to_currencies(obs.price_exalt, divine, chaos_divine)
     vol = obs.volume or 0.0
     wfs = wfs_phase1(obs.price_exalt, obs.liq_tier.gate, max(divine, 1e-9), vol)
-    return (f"**{obs.name}** — {obs.price_exalt:g} (Exalted-equiv)\n"
-            f"Liquidity: {obs.liq_tier.name} | 24h volume: {vol:g} | WFS: {wfs:.3g}")
+    note = "  ⚠ low liquidity" if obs.liq_tier.name == "LOW" else ""
+    return (f"**{obs.name}** — {px:,.4g} ex | {pdiv:,.4g} div | {pchaos:,.4g} chaos\n"
+            f"Liquidity: {obs.liq_tier.name}{note} | daily volume: {vol:,.0f} | WFS: {wfs:.3g}")
 
 
 async def topmovers_text(store: Store, n: int) -> str:

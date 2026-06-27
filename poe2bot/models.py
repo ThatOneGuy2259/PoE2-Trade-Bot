@@ -10,7 +10,9 @@ class LiquidityTier(IntEnum):
 
     @property
     def gate(self) -> float:
-        return {LiquidityTier.LOW: 0.0, LiquidityTier.MED: 0.6, LiquidityTier.HIGH: 1.0}[self]
+        # LOW is discounted but non-zero: rare-but-valuable items (e.g. Mirror) still get a
+        # meaningful Worth-Farming Score instead of collapsing to 0.
+        return {LiquidityTier.LOW: 0.3, LiquidityTier.MED: 0.6, LiquidityTier.HIGH: 1.0}[self]
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,10 @@ class AlertEvent:
     liq_tier: LiquidityTier
     trade_id: str | None
     wfs: float
+    price_exalt: float = 0.0       # current price expressed in the three primary currencies
+    price_div: float = 0.0
+    price_chaos: float = 0.0
+    low_confidence: bool = False   # True for LOW-liquidity items (price may be unreliable)
 
 
 @dataclass(frozen=True)

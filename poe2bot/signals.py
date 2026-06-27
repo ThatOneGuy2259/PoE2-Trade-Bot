@@ -37,3 +37,14 @@ def wfs_phase1(price_exalt: float, gate: float, divine_exalt: float,
     realizable = price_exalt * gate / max(divine_exalt, eps)
     absorption = max(volume_24h, 0.0) / 24.0
     return realizable * (absorption ** 0.7)
+
+
+def to_currencies(price_exalt: float, divine_exalt: float, chaos_divine: float,
+                  eps: float = 1e-9) -> tuple[float, float, float]:
+    """Convert an Exalted-equiv price to (Exalted, Divine, Chaos).
+
+    divine_exalt = Exalted per Divine; chaos_divine = Chaos per Divine. Exalted is the base
+    unit, so Chaos-per-Exalted = chaos_divine / divine_exalt.
+    """
+    d = divine_exalt if divine_exalt > 0 else eps
+    return (price_exalt, price_exalt / d, price_exalt * chaos_divine / d)
