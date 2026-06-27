@@ -7,7 +7,7 @@ from .config import Settings
 from .store import Store
 from .models import LiquidityTier
 from .sources.poe2scout import Poe2ScoutClient
-from .bot import LeagueService, build_bot, resolve_channel_id
+from .bot import LeagueService, ItemService, build_bot, resolve_channel_id
 from .scheduler import poll_once
 from .detector.engine import DetectConfig
 from .health import CircuitBreaker, ping_dead_man
@@ -44,7 +44,8 @@ async def amain(env: Mapping[str, str]) -> None:
     session = aiohttp.ClientSession()
     client = Poe2ScoutClient(session, settings.poe2scout_ua)
     league_service = LeagueService(client)
-    bot = build_bot(store, league_service, settings)
+    item_service = ItemService(client, store)
+    bot = build_bot(store, league_service, item_service, settings)
     notify = build_notifier(bot, store, settings)
     breaker = CircuitBreaker()
     cfg = DetectConfig()
