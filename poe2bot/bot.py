@@ -4,13 +4,13 @@ import logging
 import time
 import discord
 from discord import app_commands
-
-log = logging.getLogger(__name__)
 from discord.ext import commands
 from .store import Store
 from .sources.poe2scout import Poe2ScoutClient
 from .models import LiquidityTier
 from .signals import wfs_phase1, to_currencies
+
+log = logging.getLogger(__name__)
 
 
 # Preset categories for /threshold and /categories autocomplete. (api_id, label) pairs,
