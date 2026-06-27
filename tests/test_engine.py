@@ -150,6 +150,34 @@ async def test_two_of_three_persistence(tmp_path):
     await s.close()
 
 
+async def test_demand_collapse_cooldown_suppresses_second_fire(tmp_path):
+    """DEMAND_COLLAPSE fires on first poll; a second poll within cooldown_s is suppressed."""
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig()  # cooldown_s=21600
+
+    # Seed 20 obs at high volume (base_ts=280_000) within the 48h volume window of our test obs
+    # (obs1.src_ts=299_900 → window since 299_900-172800=127_100; 280_000 >= 127_100 ✓)
+    await _seed_flat(s, "divine", base_ts=280_000, n=20, price=1.0)
+
+    # Poll 1: volume collapses from ~1500 to 200 (>50% drop) -> DEMAND_COLLAPSE fires
+    # now_ts_1=300_000 > 172_800 with league_started_at=0 -> not early-league ✓
+    # freshness: now_ts_1 - src_ts = 300_000 - 299_900 = 100 <= 10800 ✓
+    obs1 = _cur(1.0, vol=200.0, src_ts=299_900)
+    now_ts_1 = 300_000
+    k1, ov1 = await detect(s, [obs1], Anchor(250.0, 1.0), league_started_at=0,
+                           now_ts=now_ts_1, cfg=cfg)
+    assert len(k1) == 1 and k1[0].cls == "DEMAND_COLLAPSE", f"expected DEMAND_COLLAPSE, got {k1}"
+
+    # Poll 2: collapse persists but now_ts_2 is within cooldown_s -> suppressed
+    obs2 = _cur(1.0, vol=200.0, src_ts=300_000)  # fresh src_ts, same low volume
+    now_ts_2 = 300_110  # only 110s after now_ts_1, well within 21600s cooldown
+    k2, ov2 = await detect(s, [obs2], Anchor(250.0, 1.0), league_started_at=0,
+                           now_ts=now_ts_2, cfg=cfg)
+    assert k2 == [], f"expected suppressed demand, got {k2}"
+
+    await s.close()
+
+
 async def test_statistical_path_blocked_during_warmup(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
     cfg = DetectConfig()                                # min_samples 12

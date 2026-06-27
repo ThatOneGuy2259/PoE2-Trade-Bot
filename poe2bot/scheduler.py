@@ -44,9 +44,15 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
     divine = _clamp_anchor(raw_anchor.divine_exalt, float(prev_div) if prev_div else None)
     anchor = Anchor(divine_exalt=divine, chaos_divine=raw_anchor.chaos_divine)
     await store.set_setting("anchor_divine", str(divine))
-    league_id = await store.get_active_league() or league
-    league_started_at = await store.get_league_started_at(league_id)
-    obs = normalize_currency(raw, league_id, anchor, src_ts)
+    started = await store.get_league_started_at(league)
+    if started == 0:
+        # bootstrap once (persisted) so the early-league mute has a real anchor;
+        # poe2scout exposes no real league start date, so first-poll time is the Phase-1 proxy
+        await store.upsert_league(league, league, league, now_ts, anchor.divine_exalt, anchor.chaos_divine)
+        await store.set_active_league(league)
+        started = now_ts
+    league_started_at = started
+    obs = normalize_currency(raw, league, anchor, src_ts)
     kept, overflow = await detect(store, obs, anchor, league_started_at, now_ts, cfg)
     for ev in kept:
         await notify(ev)

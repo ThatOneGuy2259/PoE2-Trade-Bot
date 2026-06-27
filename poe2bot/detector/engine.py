@@ -140,7 +140,12 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
         vol_base = await store.volume_window(obs.item_id, obs.src_ts - 48 * 3600)
         dem = evaluate_demand(obs, vol_base, early, cfg)
         if dem is not None:
-            candidates.append(dem)
+            last_dem = int(await store.get_setting(f"demfire:{obs.item_id}") or "0")
+            if not last_dem or (now_ts - last_dem) >= cfg.cooldown_s:
+                await store.set_setting(f"demfire:{obs.item_id}", str(now_ts))
+                candidates.append(dem)
+            else:
+                await store.record_alert(dem, fired=False, suppressed_reason="demand_cooldown", src_ts=now_ts)
     candidates.sort(key=lambda e: e.severity, reverse=True)
     kept = candidates[: cfg.top_k]
     overflow_events = candidates[cfg.top_k:]
