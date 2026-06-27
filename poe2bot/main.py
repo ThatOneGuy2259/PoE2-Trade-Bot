@@ -12,6 +12,7 @@ from .scheduler import poll_once
 from .detector.engine import DetectConfig
 from .health import CircuitBreaker, ping_dead_man
 from .alerts import to_embed, overflow_line, format_alert_lines
+from .signals import to_currencies
 
 
 def build_notifier(bot, alert_channel_id: int, health_channel_id: int | None):
@@ -91,6 +92,8 @@ async def run_once(env: Mapping[str, str], league: str | None = None) -> None:
             return
         await store.set_setting("league", league)
         n = await poll_once(store, client, cfg, int(time.time()), breaker, _stdout_notify)
+        divine = float(await store.get_setting("anchor_divine") or "1.0")
+        chaos_divine = float(await store.get_setting("anchor_chaos_divine") or "1.0")
         cur = await store._db.execute(
             "SELECT name, price_exalt, liq_tier, volume FROM obs "
             "WHERE src_ts=(SELECT MAX(src_ts) FROM obs) ORDER BY price_exalt DESC LIMIT 5")
@@ -100,10 +103,13 @@ async def run_once(env: Mapping[str, str], league: str | None = None) -> None:
         tot = await (await store._db.execute("SELECT COUNT(*) c FROM obs")).fetchone()
         print(f"\nLeague: {league}")
         print(f"Items ingested this poll: {this_poll['c']} (total ledger rows: {tot['c']}), alerts fired: {n}")
-        print("Top items by price (Exalted-equiv):")
+        print("Top items by price (Exalted / Divine / Chaos):")
         for r in rows:
-            print(f"  {r['name']:<26} {r['price_exalt']:>16.4f}  "
-                  f"tier={LiquidityTier(r['liq_tier']).name:<4} vol={r['volume']}")
+            px, pdiv, pchaos = to_currencies(r["price_exalt"], divine, chaos_divine)
+            tier = LiquidityTier(r["liq_tier"]).name
+            flag = " ⚠low-liq" if tier == "LOW" else ""
+            print(f"  {r['name']:<26} {px:>14,.4g} ex | {pdiv:>10,.4g} div | {pchaos:>12,.4g} chaos"
+                  f"   [{tier}{flag}] vol/day={(r['volume'] or 0):,.0f}")
         if n == 0:
             print("\n(0 alerts is expected on a cold ledger — the detector needs a stored "
                   "baseline before it can flag a move. Run the bot continuously to build one.)")
