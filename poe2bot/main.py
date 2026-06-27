@@ -95,9 +95,11 @@ async def run_once(env: Mapping[str, str], league: str | None = None) -> None:
             "SELECT name, price_exalt, liq_tier, volume FROM obs "
             "WHERE src_ts=(SELECT MAX(src_ts) FROM obs) ORDER BY price_exalt DESC LIMIT 5")
         rows = await cur.fetchall()
+        this_poll = await (await store._db.execute(
+            "SELECT COUNT(*) c FROM obs WHERE src_ts=(SELECT MAX(src_ts) FROM obs)")).fetchone()
         tot = await (await store._db.execute("SELECT COUNT(*) c FROM obs")).fetchone()
         print(f"\nLeague: {league}")
-        print(f"Items ingested this poll: {len(rows) and tot['c']} (ledger rows: {tot['c']}), alerts fired: {n}")
+        print(f"Items ingested this poll: {this_poll['c']} (total ledger rows: {tot['c']}), alerts fired: {n}")
         print("Top items by price (Exalted-equiv):")
         for r in rows:
             print(f"  {r['name']:<26} {r['price_exalt']:>16.4f}  "
