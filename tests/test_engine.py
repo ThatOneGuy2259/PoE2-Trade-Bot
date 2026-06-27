@@ -1,6 +1,8 @@
 import math
-from poe2bot.detector.engine import DetectConfig, evaluate_price
-from poe2bot.models import Observation, LiquidityTier
+import pytest
+from poe2bot.detector.engine import DetectConfig, evaluate_price, evaluate_demand, detect
+from poe2bot.store import Store
+from poe2bot.models import Observation, AlertEvent, Anchor, LiquidityTier
 
 def _obs(price, tier=LiquidityTier.HIGH, src_ts=1000):
     return Observation(item_id="divine", league_id="L", src_ts=src_ts, wall_ts=src_ts,
@@ -69,3 +71,95 @@ def test_cooldown_suppresses_same_direction():
                        last_fire_up_ts=9_000, last_fire_dn_ts=0, now_ts=10_000,
                        divine_exalt=250.0, cfg=cfg)
     assert v.event is None and v.reason == "cooldown"
+
+
+# ---------------------------------------------------------------------------
+# Task 11: evaluate_demand + detect() orchestration
+# ---------------------------------------------------------------------------
+
+def _cur(price, vol, src_ts, item="divine", tier=LiquidityTier.HIGH):
+    return Observation(item_id=item, league_id="L", src_ts=src_ts, wall_ts=src_ts,
+                       name=item, category="currency", is_currency_pair=True,
+                       log_price=math.log(price), price_exalt=price, volume=vol, vol_daily=None,
+                       stock=None, doi=None, liq_tier=tier, trade_id=item, valid=True)
+
+
+def test_demand_collapse_fires():
+    cfg = DetectConfig()
+    obs = _cur(1.0, vol=200.0, src_ts=5000)       # current flow 200
+    baseline = [500.0] * 20                        # median 500 -> drop 60% >= 50%
+    ev = evaluate_demand(obs, baseline, early_league=False, cfg=cfg)
+    assert ev is not None and ev.cls == "DEMAND_COLLAPSE"
+
+
+def test_demand_collapse_blocked_below_floor():
+    cfg = DetectConfig(demand_min_trades_day=10.0)
+    obs = _cur(1.0, vol=2.0, src_ts=5000)
+    baseline = [5.0] * 20                           # median 5 < 10 trades/day floor
+    assert evaluate_demand(obs, baseline, early_league=False, cfg=cfg) is None
+
+
+def test_demand_collapse_muted_early_league():
+    cfg = DetectConfig()
+    obs = _cur(1.0, vol=200.0, src_ts=5000)
+    assert evaluate_demand(obs, [500.0]*20, early_league=True, cfg=cfg) is None
+
+
+async def _seed_flat(store, item, base_ts, n=20, price=1.0):
+    for k in range(n):
+        await store.insert_observation(_cur(price, 1500.0, base_ts + k, item=item))
+    await store.update_detector_state(item, mu_frozen=math.log(price), n_obs=n)
+
+
+async def test_fast_path_fires_immediately_and_topk_caps(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig(top_k=2)
+    obss = []
+    for i, item in enumerate(["a", "b", "c"]):
+        await _seed_flat(s, item, base_ts=100)
+        # jumps 1.5/1.7/1.9 -> log 0.405/0.531/0.642, all >= 0.40 fast-path
+        obss.append(_cur(1.5 + i * 0.2, 1500.0, src_ts=100_000 + i, item=item))
+    # now_ts aligned to src_ts so the freshness gate sees the data as current
+    kept, overflow = await detect(s, obss, Anchor(250.0, 1.0), league_started_at=0,
+                                  now_ts=100_010, cfg=cfg)
+    assert len(kept) == 2 and overflow == 1            # all 3 fire, top-2 kept
+    assert kept[0].severity >= kept[1].severity        # sorted by severity
+    # detector_state re-frozen + alert_log fired rows written
+    st = await s.get_detector_state("c")
+    assert st["mu_frozen"] is not None
+    cur = await s._db.execute("SELECT COUNT(*) c FROM alert_log WHERE fired=1")
+    assert (await cur.fetchone())["c"] == 2
+    await s.close()
+
+
+async def test_two_of_three_persistence(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig()
+    # seed WITHIN the 24h src_ts window of the confirming obs (100_001 - 86_400 = 13_601),
+    # so the statistical path has >=12 in-window samples and 2-of-3 is actually exercised.
+    await _seed_flat(s, "divine", base_ts=99_980)
+    # +30% -> log 0.262: clears 15% floor, below 0.40 fast-path -> needs 2-of-3
+    k1, o1 = await detect(s, [_cur(1.30, 1500.0, src_ts=100_001)], Anchor(250.0, 1.0),
+                          league_started_at=0, now_ts=100_010, cfg=cfg)
+    assert k1 == []                                    # first sighting: pending=1, no fire
+    k2, o2 = await detect(s, [_cur(1.30, 1500.0, src_ts=100_002)], Anchor(250.0, 1.0),
+                          league_started_at=0, now_ts=101_810, cfg=cfg)
+    assert len(k2) == 1 and k2[0].cls == "JUMP"        # second confirming poll fires
+    st = await s.get_detector_state("divine")
+    assert st["mu_frozen"] is not None and st["last_fire_up_ts"] == 101_810
+    await s.close()
+
+
+async def test_statistical_path_blocked_during_warmup(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig()                                # min_samples 12
+    # only 3 prior samples -> a non-fast-path +30% move is suppressed as insufficient_samples
+    await _seed_flat(s, "divine", base_ts=100, n=3)
+    k, o = await detect(s, [_cur(1.30, 1500.0, src_ts=100_010)], Anchor(250.0, 1.0),
+                        league_started_at=0, now_ts=100_020, cfg=cfg)
+    assert k == []
+    # ...but a fast-path move (>=0.40) DOES fire even with only 3 samples
+    k2, o2 = await detect(s, [_cur(1.7, 1500.0, src_ts=100_011)], Anchor(250.0, 1.0),
+                          league_started_at=0, now_ts=100_030, cfg=cfg)
+    assert len(k2) == 1 and k2[0].cls == "JUMP"
+    await s.close()
