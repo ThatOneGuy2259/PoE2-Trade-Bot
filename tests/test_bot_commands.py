@@ -243,9 +243,18 @@ async def test_sync_commands_no_targets_falls_back_global():
 
 
 def test_categories_constant_shape():
-    ids = {api_id for api_id, _ in CATEGORIES}
-    assert {"currency", "fragments", "runes", "essences"} <= ids
-    assert all(isinstance(a, str) and isinstance(l, str) for a, l in CATEGORIES)
+    ids = {api_id for api_id, *_ in CATEGORIES}
+    assert {"currency", "fragments", "runes", "essences"} <= ids          # currency-family
+    assert {"weapon", "armour", "accessory"} <= ids                       # uniques (Phase 2B)
+    assert all(isinstance(a, str) and isinstance(l, str) and fam in {"currency", "uniques"}
+               for a, l, fam in CATEGORIES)
+
+
+def test_category_family():
+    from poe2bot.categories import category_family
+    assert category_family("currency") == "currency"
+    assert category_family("weapon") == "uniques"
+    assert category_family("not-a-real-category") is None                 # unknown -> None, no raise
 
 
 def test_filter_category_choices():
@@ -253,7 +262,7 @@ def test_filter_category_choices():
     opts = filter_category_choices("frag")
     assert opts == [("fragments", "fragments")]
     assert filter_category_choices("Soul") == [("ultimatum", "ultimatum")]      # label match
-    assert filter_category_choices("") == [(a, a) for a, _ in CATEGORIES]        # all, value=id
+    assert filter_category_choices("") == [(a, a) for a, *_ in CATEGORIES]       # all, value=id
     # comma list: completes the LAST token, preserves earlier ones, skips chosen
     opts = filter_category_choices("currency,fr")
     assert ("currency,fragments", "currency,fragments") in opts

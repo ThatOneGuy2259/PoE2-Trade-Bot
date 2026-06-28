@@ -143,3 +143,57 @@ async def test_poll_once_bootstraps_league_row(tmp_path):
     await poll_once(s, _StubClient(raw), DetectConfig(), now_ts=now_2, breaker=cb, notify=notify)
     assert await s.get_league_started_at("L") == now_1            # not overwritten on later polls
     await s.close()
+
+
+class _FamilyClient:
+    """Stub that records which endpoint each category hit (dispatch-by-family check)."""
+    def __init__(self): self.cur = []; self.uniq = []
+    async def get_league_meta(self, league): return {"DivinePrice": 250.0, "ChaosDivinePrice": 1.0}
+    async def get_currency_overview(self, league, category="currency"):
+        self.cur.append(category)
+        return {"Items": [{"ApiId": f"{category}-x", "Text": "c", "CurrentPrice": 5.0,
+                           "CurrentQuantity": 1, "PriceLogs": [{"Price": 5.0, "Quantity": 100000}]}]}
+    async def get_uniques_overview(self, league, category):
+        self.uniq.append(category)
+        return {"Items": [{"UniqueItemId": 42, "Text": "Bluetongue", "CurrentPrice": 1000.0,
+                           "CurrentQuantity": 3, "PriceLogs": [None, {"Price": 1000.0, "Quantity": 7}]}]}
+
+
+async def test_poll_once_dispatches_uniques_by_family(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "L")
+    await s.set_setting("categories", "currency,weapon")
+    c = _FamilyClient()
+    async def notify(ev): pass
+    await poll_once(s, c, DetectConfig(), now_ts=1_000_000, breaker=CircuitBreaker(), notify=notify)
+    assert c.cur == ["currency"] and c.uniq == ["weapon"]        # routed to the right endpoint each
+    cur = await s._db.execute("SELECT item_id, category, is_currency_pair FROM obs ORDER BY item_id")
+    rows = {r["item_id"]: (r["category"], r["is_currency_pair"]) for r in await cur.fetchall()}
+    assert rows == {"currency-x": ("currency", 1), "unique-42": ("weapon", 0)}
+    await s.close()
+
+
+async def test_poll_once_skips_unknown_category(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "L")
+    await s.set_setting("categories", "currency,bogus")
+    c = _MultiCatClient()
+    async def notify(ev): pass
+    n = await poll_once(s, c, DetectConfig(), now_ts=1_000_000, breaker=CircuitBreaker(), notify=notify)
+    assert c.requested == ["currency"]                          # 'bogus' is never fetched
+    assert n == 0
+    await s.close()
+
+
+async def test_poll_once_all_unknown_returns_zero_no_alarm(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "L")
+    await s.set_setting("categories", "bogus1,bogus2")
+    c = _MultiCatClient()
+    cb = CircuitBreaker(threshold=1)
+    sent = []
+    async def notify(ev): sent.append(ev)
+    n = await poll_once(s, c, DetectConfig(), now_ts=1, breaker=cb, notify=notify)
+    assert n == 0 and c.requested == []                         # nothing fetched
+    assert {"health": "source_down"} not in sent and cb.is_open is False   # not a source-down alarm
+    await s.close()

@@ -56,15 +56,16 @@ class Poe2ScoutClient:
                 return e
         return None
 
-    async def get_currency_overview(self, league: str, category: str = "currency",
-                                    per_page: int = 250) -> dict:
-        """All items in one currency-family category for a league, paging through
-        Currencies/ByCategory.
+    async def _paginate_by_category(self, league: str, segment: str, category: str,
+                                    per_page: int) -> dict:
+        """Page through {segment}/ByCategory for one category, accumulating all pages.
 
-        Returns {"Items": [...all pages...], "Pages": n, "Total": t}. Both the league name
-        and category go in pre-encoded URL parts so yarl does not double-encode them.
+        Returns {"Items": [...all pages...], "Pages": n, "Total": t}. The league name and
+        category go in pre-encoded URL parts (quote ..., safe='') so yarl does not double-encode
+        them; `segment` is a trusted constant ("Currencies"/"Uniques"). A courtesy delay precedes
+        every request so a multi-category poll stays within the API's rate etiquette.
         """
-        path = f"{self._base}/{self._realm}/Leagues/{quote(league, safe='')}/Currencies/ByCategory"
+        path = f"{self._base}/{self._realm}/Leagues/{quote(league, safe='')}/{segment}/ByCategory"
         cat = quote(category, safe='')
         items: list[dict] = []
         page, pages, total = 1, 1, 0
@@ -82,3 +83,13 @@ class Poe2ScoutClient:
                 break
             page += 1
         return {"Items": items, "Pages": pages, "Total": total}
+
+    async def get_currency_overview(self, league: str, category: str = "currency",
+                                    per_page: int = 250) -> dict:
+        """All items in one currency-family category, via Currencies/ByCategory."""
+        return await self._paginate_by_category(league, "Currencies", category, per_page)
+
+    async def get_uniques_overview(self, league: str, category: str,
+                                   per_page: int = 250) -> dict:
+        """All unique items in one equipment category, via Uniques/ByCategory."""
+        return await self._paginate_by_category(league, "Uniques", category, per_page)

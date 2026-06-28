@@ -54,3 +54,32 @@ def normalize_currency(raw: dict, league_id: str, anchor: Anchor, src_ts: int,
             volume=volume, vol_daily=volume, stock=stock, doi=None,
             liq_tier=tier_from_volume(volume), trade_id=None, valid=True))
     return out
+
+
+def normalize_uniques(raw: dict, league_id: str, anchor: Anchor, src_ts: int,
+                      category: str) -> list[Observation]:
+    """Normalize a poe2scout Uniques/ByCategory response into Observations.
+
+    Unique items have a different shape than currency: no ApiId (keyed on the int UniqueItemId),
+    a Text display name, and PriceLogs that can contain null gap entries. CurrentPrice is in the
+    same Exalted-equiv unit as currency. `category` is the requested api_id (matches thr:<cat>).
+    """
+    out: list[Observation] = []
+    for it in raw.get("Items", []):
+        price = it.get("CurrentPrice")
+        if price is None or price <= 0:
+            continue
+        uid = it.get("UniqueItemId")
+        if uid is None:
+            continue
+        item_id = f"unique-{uid}"
+        volume = _daily_volume(it)                  # already skips null PriceLog entries
+        snap = it.get("CurrentQuantity")
+        stock = float(snap) if snap is not None else None
+        out.append(Observation(
+            item_id=item_id, league_id=league_id, src_ts=src_ts, wall_ts=src_ts,
+            name=it.get("Text") or it.get("Name") or item_id, category=category,
+            is_currency_pair=False, log_price=to_log_price(float(price)), price_exalt=float(price),
+            volume=volume, vol_daily=volume, stock=stock, doi=None,
+            liq_tier=tier_from_volume(volume), trade_id=None, valid=True))
+    return out

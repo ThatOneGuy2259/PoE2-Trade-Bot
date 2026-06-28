@@ -9,24 +9,9 @@ from .store import Store
 from .sources.poe2scout import Poe2ScoutClient
 from .models import LiquidityTier
 from .signals import wfs_phase1, to_currencies
+from .categories import CATEGORIES   # registry lives in a neutral module; re-exported here
 
 log = logging.getLogger(__name__)
-
-
-# Preset categories for /threshold and /categories autocomplete. (api_id, label) pairs,
-# from poe2scout's per-league Items/Categories (CurrencyCategories — the set reachable
-# through the Currencies/ByCategory endpoint the poller uses). These rarely change, so a
-# static list is fine. NOTE: Phase 1 polls only `currency`; the rest are presets ready for
-# multi-category scanning (Phase 2). Discord caps a choices/autocomplete list at 25 (17 here).
-CATEGORIES: list[tuple[str, str]] = [
-    ("currency", "Currency"), ("fragments", "Fragments"), ("runes", "Runes"),
-    ("essences", "Essences"), ("ultimatum", "Soul Cores"),
-    ("expedition", "Expedition Coinage & Artifacts"), ("ritual", "Ritual Omens"),
-    ("vaultkeys", "Reliquary Keys"), ("breach", "Breach"), ("abyss", "Abyssal Bones"),
-    ("uncutgems", "Uncut Gems"), ("lineagesupportgems", "Lineage Support Gems"),
-    ("delirium", "Delirium"), ("incursion", "Incursion"), ("idol", "Idols"),
-    ("verisium", "Verisium"), ("vaal", "Vaal"),
-]
 
 
 class LeagueService:
@@ -141,7 +126,7 @@ def filter_category_choices(current: str, limit: int = 25) -> list[tuple[str, st
     chosen = {t.strip().lower() for t in head.split(",") if t.strip()}
     q = tail.strip().lower()
     out: list[tuple[str, str]] = []
-    for api_id, label in CATEGORIES:
+    for api_id, label, _family in CATEGORIES:
         if api_id.lower() in chosen:
             continue
         if not q or q in api_id.lower() or q in label.lower():
@@ -355,7 +340,7 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
 
     @bot.tree.command(name="threshold", description="Set spike threshold for a category")
     @app_commands.choices(category=[app_commands.Choice(name=label, value=api_id)
-                                    for api_id, label in CATEGORIES])
+                                    for api_id, label, _family in CATEGORIES])
     async def threshold_cmd(interaction: discord.Interaction,
                             category: app_commands.Choice[str], spike_pct: float):
         try:
