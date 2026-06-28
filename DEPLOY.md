@@ -1,8 +1,20 @@
 # Deploying PoE2 Trade Bot (Docker, Debian/Ubuntu x86_64)
 
-You run these on the **server** (SSH in over Tailscale). The bot makes only outbound
-connections (Discord + poe2scout), so it needs no inbound ports and does not depend on
-Tailscale to run — Tailscale is just how you reach the box.
+## Automated deploy (GitHub Actions)
+
+Pushing to `main` auto-deploys via `.github/workflows/deploy.yml`, which runs on a
+**self-hosted runner on the server box**: it builds the image, swaps the `poe2bot`
+container, and health-checks it. All local to the box — no SSH, no GitHub secrets; the
+token stays in `poe2bot.env` on the box. Triggers are push-to-main and the manual "Run
+workflow" button only (never `pull_request`), so a fork PR can't run code on the runner.
+If the runner user's HOME isn't where `poe2bot.env` lives, set the repo variable
+`POE2BOT_ENV_FILE` to its absolute path. The manual steps below remain valid as a fallback.
+
+---
+
+The manual path: run these on the **server** (SSH in over Tailscale). The bot makes only
+outbound connections (Discord + poe2scout), so it needs no inbound ports and does not depend
+on Tailscale to run — Tailscale is just how you reach the box.
 
 > **Never paste your bot token into a chat or commit it.** It lives only in the env file
 > created in step 4, with `chmod 600`.
