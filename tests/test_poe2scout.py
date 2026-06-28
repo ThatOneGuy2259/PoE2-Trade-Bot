@@ -51,3 +51,13 @@ async def test_get_currency_overview_threads_category():
     client = Poe2ScoutClient(sess, ua="poe2bot/test", req_delay_s=0)
     await client.get_currency_overview("Rise of the Abyssal", "fragments")
     assert "Category=fragments" in str(sess.last_url)         # category threads into the querystring
+    assert "/Currencies/ByCategory" in str(sess.last_url)     # currency-family segment
+
+
+async def test_get_uniques_overview_hits_uniques_segment():
+    sess = _FakeSession({"CurrentPage": 1, "Pages": 1, "Total": 1, "Items": [{"UniqueItemId": 1}]})
+    client = Poe2ScoutClient(sess, ua="poe2bot/test", req_delay_s=0)
+    raw = await client.get_uniques_overview("Rise of the Abyssal", "weapon")
+    assert raw["Total"] == 1 and len(raw["Items"]) == 1
+    assert "/Uniques/ByCategory" in str(sess.last_url)        # uniques segment, not Currencies
+    assert "Category=weapon" in str(sess.last_url)

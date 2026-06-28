@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 from poe2bot.models import Anchor, LiquidityTier
-from poe2bot.sources.normalize import normalize_currency, tier_from_volume, _daily_volume
+from poe2bot.sources.normalize import (normalize_currency, normalize_uniques,
+                                        tier_from_volume, _daily_volume)
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -44,3 +45,25 @@ def test_daily_volume_skips_null_entries():
     assert _daily_volume({"PriceLogs": [None, {"Price": 1.0, "Quantity": 42}, None]}) == 42.0
     assert _daily_volume({"PriceLogs": [None, None]}) is None
     assert _daily_volume({}) is None
+
+
+def test_normalize_uniques_maps_fields():
+    anchor = Anchor(divine_exalt=250.0, chaos_divine=1.0)
+    raw = {"Items": [
+        {"UniqueItemId": 229, "Text": "Bluetongue Shortsword", "Name": "Bluetongue",
+         "CategoryApiId": "weapon", "Type": "Shortsword", "CurrentPrice": 1000,  # int -> float
+         "CurrentQuantity": 3,
+         "PriceLogs": [None, {"Price": 1000.0, "Time": "2026-06-27T00:00:00", "Quantity": 7}]},
+        {"Name": "no price"},                                  # no CurrentPrice -> skipped
+        {"UniqueItemId": 5, "Text": "free", "CurrentPrice": 0},  # price 0 -> skipped
+        {"Text": "no id", "CurrentPrice": 10.0},                # no UniqueItemId -> skipped
+    ]}
+    obs = normalize_uniques(raw, "L", anchor, src_ts=1, category="weapon")
+    assert len(obs) == 1
+    o = obs[0]
+    assert o.item_id == "unique-229"                           # keyed on UniqueItemId, prefixed
+    assert o.name == "Bluetongue Shortsword"                   # Text preferred
+    assert o.category == "weapon" and o.is_currency_pair is False
+    assert o.price_exalt == 1000.0 and isinstance(o.price_exalt, float)
+    assert o.volume == 7.0                                     # latest non-null PriceLog quantity
+    assert o.stock == 3.0 and o.trade_id is None and o.valid is True

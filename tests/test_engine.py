@@ -4,6 +4,10 @@ from poe2bot.detector.engine import DetectConfig, evaluate_price, evaluate_deman
 from poe2bot.store import Store
 from poe2bot.models import Observation, AlertEvent, Anchor, LiquidityTier
 
+# legacy tests use a baseline of 1.0 ex; disable the junk-price gate so it doesn't suppress them.
+def _cfg(**kw):
+    return DetectConfig(min_alert_price_exalt=0, **kw)
+
 def _obs(price, tier=LiquidityTier.HIGH, src_ts=1000):
     return Observation(item_id="divine", league_id="L", src_ts=src_ts, wall_ts=src_ts,
                        name="Divine Orb", category="currency", is_currency_pair=True,
@@ -12,7 +16,7 @@ def _obs(price, tier=LiquidityTier.HIGH, src_ts=1000):
                        trade_id="divine", valid=True)
 
 def test_jump_fires_above_floor():
-    cfg = DetectConfig()
+    cfg = _cfg()
     base = [math.log(1.0)] * 20
     v = evaluate_price(_obs(1.30), mu_frozen=math.log(1.0), baseline_logs=base,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
@@ -22,28 +26,28 @@ def test_jump_fires_above_floor():
     assert v.fast_path is False        # +30% clears the 15% floor but is below the 0.40 fast-path
 
 def test_fast_path_flagged_above_040():
-    cfg = DetectConfig()
+    cfg = _cfg()
     v = evaluate_price(_obs(1.6), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
                        anchor=Anchor(250.0, 1.0), cfg=cfg)
     assert v.event is not None and v.fast_path is True    # log(1.6)=0.47 >= 0.40
 
 def test_early_league_mutes_crash():
-    cfg = DetectConfig()
+    cfg = _cfg()
     v = evaluate_price(_obs(0.70), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
                        anchor=Anchor(250.0, 1.0), cfg=cfg, early_league=True)
     assert v.event is None and v.reason == "early_league_mute"
 
 def test_early_league_does_not_mute_jump():
-    cfg = DetectConfig()
+    cfg = _cfg()
     v = evaluate_price(_obs(1.30), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
                        anchor=Anchor(250.0, 1.0), cfg=cfg, early_league=True)
     assert v.event is not None and v.event.cls == "JUMP"
 
 def test_small_move_no_fire():
-    cfg = DetectConfig()
+    cfg = _cfg()
     base = [math.log(1.0)] * 20
     v = evaluate_price(_obs(1.05), mu_frozen=math.log(1.0), baseline_logs=base,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
@@ -51,14 +55,14 @@ def test_small_move_no_fire():
     assert v.event is None
 
 def test_crash_fires_below_floor():
-    cfg = DetectConfig()
+    cfg = _cfg()
     v = evaluate_price(_obs(0.70), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
                        anchor=Anchor(250.0, 1.0), cfg=cfg)
     assert v.event is not None and v.event.cls == "CRASH" and v.event.direction == "down"
 
 def test_cheap_item_uses_higher_floor():
-    cfg = DetectConfig()
+    cfg = _cfg()
     # price 0.10 (<2 cheap) moved +18% -> below 25% cheap floor, no fire
     v = evaluate_price(_obs(0.118), mu_frozen=math.log(0.10), baseline_logs=[math.log(0.10)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
@@ -66,7 +70,7 @@ def test_cheap_item_uses_higher_floor():
     assert v.event is None
 
 def test_cooldown_suppresses_same_direction():
-    cfg = DetectConfig(cooldown_s=21600)
+    cfg = _cfg(cooldown_s=21600)
     v = evaluate_price(_obs(1.30), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=9_000, last_fire_dn_ts=0, now_ts=10_000,
                        anchor=Anchor(250.0, 1.0), cfg=cfg)
@@ -74,7 +78,7 @@ def test_cooldown_suppresses_same_direction():
 
 
 def test_category_floor_overrides_base():
-    cfg = DetectConfig()
+    cfg = _cfg()
     base = [math.log(1.0)] * 20
     # +30% clears the default 0.15 floor and fires...
     assert evaluate_price(_obs(1.30), math.log(1.0), base, 0, 0, 10_000,
@@ -86,7 +90,7 @@ def test_category_floor_overrides_base():
 
 
 def test_category_floor_cannot_weaken_low_liq_guard():
-    cfg = DetectConfig()
+    cfg = _cfg()
     base = [math.log(1.0)] * 20
     # a LOOSE category floor (0.05) must not lower the LOW-liquidity guard (0.40):
     # +30% on a LOW item still does not fire.
@@ -107,7 +111,7 @@ def _cur(price, vol, src_ts, item="divine", tier=LiquidityTier.HIGH):
 
 
 def test_demand_collapse_fires():
-    cfg = DetectConfig()
+    cfg = _cfg()
     obs = _cur(1.0, vol=8000.0, src_ts=5000)       # current daily volume 8000
     baseline = [20000.0] * 20                       # median 20000 -> drop 60% >= 50%
     ev = evaluate_demand(obs, baseline, early_league=False, cfg=cfg)
@@ -115,14 +119,14 @@ def test_demand_collapse_fires():
 
 
 def test_demand_collapse_blocked_below_floor():
-    cfg = DetectConfig()                            # demand_min_volume default 5000
+    cfg = _cfg()                            # demand_min_volume default 5000
     obs = _cur(1.0, vol=1000.0, src_ts=5000)
     baseline = [3000.0] * 20                         # median 3000 < 5000 daily-volume floor
     assert evaluate_demand(obs, baseline, early_league=False, cfg=cfg) is None
 
 
 def test_demand_collapse_muted_early_league():
-    cfg = DetectConfig()
+    cfg = _cfg()
     obs = _cur(1.0, vol=8000.0, src_ts=5000)
     assert evaluate_demand(obs, [20000.0]*20, early_league=True, cfg=cfg) is None
 
@@ -135,7 +139,7 @@ async def _seed_flat(store, item, base_ts, n=20, price=1.0, vol=1500.0):
 
 async def test_fast_path_fires_immediately_and_topk_caps(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig(top_k=2)
+    cfg = _cfg(top_k=2)
     obss = []
     for i, item in enumerate(["a", "b", "c"]):
         await _seed_flat(s, item, base_ts=100)
@@ -157,7 +161,7 @@ async def test_fast_path_fires_immediately_and_topk_caps(tmp_path):
 async def test_per_category_cap_is_independent(tmp_path):
     """top_k caps each category SEPARATELY, so a volatile category can't starve another."""
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig(top_k=2)
+    cfg = _cfg(top_k=2)
     def cat_obs(item, price, category, src_ts):
         return Observation(item_id=item, league_id="L", src_ts=src_ts, wall_ts=src_ts,
                            name=item, category=category, is_currency_pair=True,
@@ -181,7 +185,7 @@ async def test_per_category_cap_is_independent(tmp_path):
 
 async def test_two_of_three_persistence(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig()
+    cfg = _cfg()
     # seed WITHIN the 24h src_ts window of the confirming obs (100_001 - 86_400 = 13_601),
     # so the statistical path has >=12 in-window samples and 2-of-3 is actually exercised.
     await _seed_flat(s, "divine", base_ts=99_980)
@@ -200,7 +204,7 @@ async def test_two_of_three_persistence(tmp_path):
 async def test_demand_collapse_cooldown_suppresses_second_fire(tmp_path):
     """DEMAND_COLLAPSE fires on first poll; a second poll within cooldown_s is suppressed."""
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig()  # cooldown_s=21600
+    cfg = _cfg()  # cooldown_s=21600
 
     # Seed 20 obs at high daily volume (base_ts=280_000) within the 48h volume window of our
     # test obs (obs1.src_ts=299_900 → window since 299_900-172800=127_100; 280_000 >= 127_100 ✓)
@@ -229,7 +233,7 @@ async def test_low_liquidity_needs_confirmation_and_flags(tmp_path):
     """A LOW-liquidity item must clear 2-of-3 even on a big move (no immediate fast-path),
     and its alert is tagged low_confidence."""
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig()
+    cfg = _cfg()
     await _seed_flat(s, "rare", base_ts=99_980, vol=800.0)     # daily vol 800 -> LOW tier
     def low_obs(src_ts):
         return _cur(1.6, 800.0, src_ts=src_ts, item="rare", tier=LiquidityTier.LOW)  # +60% move
@@ -244,7 +248,7 @@ async def test_low_liquidity_needs_confirmation_and_flags(tmp_path):
 
 async def test_statistical_path_blocked_during_warmup(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig()                                # min_samples 12
+    cfg = _cfg()                                # min_samples 12
     # only 3 prior samples -> a non-fast-path +30% move is suppressed as insufficient_samples
     await _seed_flat(s, "divine", base_ts=100, n=3)
     k, o = await detect(s, [_cur(1.30, 1500.0, src_ts=100_010)], Anchor(250.0, 1.0),
@@ -254,4 +258,48 @@ async def test_statistical_path_blocked_during_warmup(tmp_path):
     k2, o2 = await detect(s, [_cur(1.7, 1500.0, src_ts=100_011)], Anchor(250.0, 1.0),
                           league_started_at=0, now_ts=100_030, cfg=cfg)
     assert len(k2) == 1 and k2[0].cls == "JUMP"
+    await s.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2B: junk-price gate (default DetectConfig, min_alert_price_exalt=1.0)
+# ---------------------------------------------------------------------------
+
+def test_junk_gate_suppresses_floor_sitter():
+    # baseline at the 1-ex display floor + a 1->2 ex (+100%) tick: clears the floor but is junk
+    v = evaluate_price(_obs(2.0), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
+                       last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
+                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig())
+    assert v.event is None and v.reason == "below_min_price"
+
+
+def test_junk_gate_allows_valuable_item():
+    # baseline 5 ex (above the floor) + 30%: a real signal, not gated
+    v = evaluate_price(_obs(6.5), mu_frozen=math.log(5.0), baseline_logs=[math.log(5.0)]*20,
+                       last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
+                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig())
+    assert v.event is not None and v.event.cls == "JUMP"
+
+
+def test_junk_gate_blocks_demand_on_floor_item():
+    obs = _cur(1.0, vol=8000.0, src_ts=5000)            # priced at the floor
+    assert evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig()) is None
+
+
+def test_junk_gate_allows_demand_on_valuable_item():
+    obs = _cur(5.0, vol=8000.0, src_ts=5000)            # 5 ex, real item
+    ev = evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig())
+    assert ev is not None and ev.cls == "DEMAND_COLLAPSE"
+
+
+async def test_junk_gate_records_suppression_in_detect(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig()                                # gate ON (default 1.0)
+    await _seed_flat(s, "junk", base_ts=99_980, price=1.0)
+    k, o = await detect(s, [_cur(2.0, 1500.0, src_ts=100_001, item="junk")], Anchor(250.0, 1.0),
+                        league_started_at=0, now_ts=100_010, cfg=cfg)
+    assert k == []                                      # floor-sitter mover suppressed, not fired
+    row = await (await s._db.execute(
+        "SELECT suppressed_reason FROM alert_log WHERE fired=0 ORDER BY alert_id DESC LIMIT 1")).fetchone()
+    assert row["suppressed_reason"] == "below_min_price"
     await s.close()

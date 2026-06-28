@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from ..models import Observation, AlertEvent, Anchor, LiquidityTier
 from ..signals import median, pct_from_log, wfs_phase1, relative_drop, to_currencies
@@ -15,6 +16,8 @@ class DetectConfig:
     top_k: int = 8
     demand_drop: float = 0.50
     demand_min_volume: float = 5000.0  # daily-volume floor below which demand is too noisy
+    min_alert_price_exalt: float = 1.0  # items whose baseline sits at/below this (the 1-ex display
+                                        # floor) carry no real price signal — gate their alerts. 0 disables.
     quality: QualityConfig = field(default_factory=QualityConfig)
 
 @dataclass(frozen=True)
@@ -54,6 +57,12 @@ def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: lis
     fires = fast or abs(move) >= floor
     if not fires:
         return PriceVerdict(None, None, None)
+    # Junk-price gate: an item whose BASELINE sits at/below the 1-exalt display floor has no real
+    # price signal (vendor-tier uniques pinned at 1 ex), so a "move" off the floor is noise. Gating
+    # on the baseline (not current) also silences a floor-sitter that ticks up. Placed after the
+    # `fires` check so only would-be alerts are recorded, not every floor-sitter every poll.
+    if cfg.min_alert_price_exalt > 0 and reference <= math.log(cfg.min_alert_price_exalt):
+        return PriceVerdict(None, None, "below_min_price")
     direction = "up" if move > 0 else "down"
     if early_league and direction == "down":
         return PriceVerdict(None, None, "early_league_mute")
@@ -76,6 +85,8 @@ def evaluate_demand(obs: Observation, volume_baseline: list[float],
                     anchor: Anchor | None = None) -> AlertEvent | None:
     if early_league or obs.volume is None or not volume_baseline:
         return None
+    if cfg.min_alert_price_exalt > 0 and obs.price_exalt <= cfg.min_alert_price_exalt:
+        return None                            # worthless floor-priced item: demand drop isn't news
     base = median(volume_baseline)
     if base < cfg.demand_min_volume:           # too thin for the demand signal to be trustworthy
         return None
@@ -156,7 +167,7 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
                     await _reset_pending(store, obs.item_id, ev.direction)
                     await _fire_state(store, obs.item_id, ev.direction, verdict.new_mu_frozen, now_ts)
                     _add(obs.category, ev)
-        elif verdict.reason in ("cooldown", "early_league_mute"):
+        elif verdict.reason in ("cooldown", "early_league_mute", "below_min_price"):
             await store.record_alert(_suppressed(obs), fired=False,
                                      suppressed_reason=verdict.reason, src_ts=obs.src_ts)
         else:

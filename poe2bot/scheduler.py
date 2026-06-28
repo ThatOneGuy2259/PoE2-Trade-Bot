@@ -1,8 +1,9 @@
 from __future__ import annotations
 import logging
 from .models import Anchor
-from .sources.normalize import normalize_currency
+from .sources.normalize import normalize_currency, normalize_uniques
 from .detector.engine import detect, DetectConfig
+from .categories import category_family
 
 log = logging.getLogger(__name__)
 
@@ -64,15 +65,28 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
     # breaker only trips when EVERY category fetch fails (a systemic source outage).
     categories = _scanned_categories(await store.get_setting("categories"))
     obs = []
-    succeeded = 0
+    attempted = 0       # categories known to the registry (a fetch was tried)
+    succeeded = 0       # categories whose fetch+normalize succeeded
     for cat in categories:
+        fam = category_family(cat)
+        if fam is None:
+            log.warning("unknown category %s — skipping", cat)
+            continue
+        attempted += 1
         try:
-            raw = await client.get_currency_overview(league, cat)
+            if fam == "uniques":
+                raw = await client.get_uniques_overview(league, cat)
+                items = normalize_uniques(raw, league, anchor, now_ts, cat)
+            else:
+                raw = await client.get_currency_overview(league, cat)
+                items = normalize_currency(raw, league, anchor, now_ts, cat)
         except Exception as e:
             log.warning("category %s fetch failed: %s", cat, e)
             continue
         succeeded += 1
-        obs.extend(normalize_currency(raw, league, anchor, now_ts, cat))
+        obs.extend(items)
+    if attempted == 0:
+        return 0        # only unknown/typo'd categories configured — a config error, not source-down
     if succeeded == 0:
         if breaker.record_failure():
             await notify({"health": "source_down"})

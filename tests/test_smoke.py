@@ -32,7 +32,7 @@ async def test_end_to_end_pipeline_fires(tmp_path):
     sent = []
     async def notify(ev): sent.append(ev)
     cb = CircuitBreaker()
-    cfg = DetectConfig()
+    cfg = DetectConfig(min_alert_price_exalt=0)   # fixtures use a 1-ex baseline; disable the junk gate
     # 15 flat polls seed the baseline, then a +40% move confirmed over 2 polls -> a JUMP fires.
     # src_ts = the now_ts we pass (poe2scout has no epoch); keep it current so data is "fresh".
     prices = [1.0] * 15 + [1.4, 1.4]
