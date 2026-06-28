@@ -13,7 +13,7 @@ class _SeqClient:
         self._prices = prices
         self._i = 0
 
-    async def get_currency_overview(self, league):
+    async def get_currency_overview(self, league, category="currency"):
         p = self._prices[min(self._i, len(self._prices) - 1)]
         self._i += 1
         return {"CurrentPage": 1, "Pages": 1, "Total": 1,

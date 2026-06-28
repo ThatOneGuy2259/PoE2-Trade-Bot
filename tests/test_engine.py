@@ -73,6 +73,28 @@ def test_cooldown_suppresses_same_direction():
     assert v.event is None and v.reason == "cooldown"
 
 
+def test_category_floor_overrides_base():
+    cfg = DetectConfig()
+    base = [math.log(1.0)] * 20
+    # +30% clears the default 0.15 floor and fires...
+    assert evaluate_price(_obs(1.30), math.log(1.0), base, 0, 0, 10_000,
+                          Anchor(250.0, 1.0), cfg).event is not None
+    # ...but a per-category floor of 0.40 for "currency" raises the bar above +30% -> no fire
+    v = evaluate_price(_obs(1.30), math.log(1.0), base, 0, 0, 10_000, Anchor(250.0, 1.0), cfg,
+                       category_floors={"currency": 0.40})
+    assert v.event is None
+
+
+def test_category_floor_cannot_weaken_low_liq_guard():
+    cfg = DetectConfig()
+    base = [math.log(1.0)] * 20
+    # a LOOSE category floor (0.05) must not lower the LOW-liquidity guard (0.40):
+    # +30% on a LOW item still does not fire.
+    v = evaluate_price(_obs(1.30, tier=LiquidityTier.LOW), math.log(1.0), base, 0, 0, 10_000,
+                       Anchor(250.0, 1.0), cfg, category_floors={"currency": 0.05})
+    assert v.event is None
+
+
 # ---------------------------------------------------------------------------
 # Task 11: evaluate_demand + detect() orchestration
 # ---------------------------------------------------------------------------
@@ -129,6 +151,31 @@ async def test_fast_path_fires_immediately_and_topk_caps(tmp_path):
     assert st["mu_frozen"] is not None
     cur = await s._db.execute("SELECT COUNT(*) c FROM alert_log WHERE fired=1")
     assert (await cur.fetchone())["c"] == 2
+    await s.close()
+
+
+async def test_per_category_cap_is_independent(tmp_path):
+    """top_k caps each category SEPARATELY, so a volatile category can't starve another."""
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = DetectConfig(top_k=2)
+    def cat_obs(item, price, category, src_ts):
+        return Observation(item_id=item, league_id="L", src_ts=src_ts, wall_ts=src_ts,
+                           name=item, category=category, is_currency_pair=True,
+                           log_price=math.log(price), price_exalt=price, volume=1500.0,
+                           vol_daily=None, stock=None, doi=None, liq_tier=LiquidityTier.HIGH,
+                           trade_id=item, valid=True)
+    obss = []
+    for cat in ("currency", "fragments"):
+        for i in range(3):                                   # 3 fast-path jumps per category
+            item = f"{cat}-{i}"
+            await _seed_flat(s, item, base_ts=100)
+            obss.append(cat_obs(item, 1.5 + i * 0.2, cat, src_ts=100_000 + i))
+    kept, overflow = await detect(s, obss, Anchor(250.0, 1.0), league_started_at=0,
+                                  now_ts=100_010, cfg=cfg, category_floors=None)
+    assert len(kept) == 4 and overflow == 2                  # 2 kept per category, 1 over each
+    from collections import Counter
+    by_cat = Counter(ev.item_id.split("-")[0] for ev in kept)
+    assert by_cat["currency"] == 2 and by_cat["fragments"] == 2
     await s.close()
 
 

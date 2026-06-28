@@ -27,7 +27,8 @@ class PriceVerdict:
 def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: list[float],
                    last_fire_up_ts: int, last_fire_dn_ts: int, now_ts: int,
                    anchor: Anchor, cfg: DetectConfig,
-                   early_league: bool = False) -> PriceVerdict:
+                   early_league: bool = False,
+                   category_floors: dict[str, float] | None = None) -> PriceVerdict:
     if mu_frozen is not None:
         reference = mu_frozen
     elif baseline_logs:
@@ -37,12 +38,16 @@ def evaluate_price(obs: Observation, mu_frozen: float | None, baseline_logs: lis
     log_move = obs.log_price - reference
     move = pct_from_log(obs.log_price, reference)
     is_low = obs.liq_tier == LiquidityTier.LOW
+    # Per-category threshold sets the BASE spike floor (default cfg.floor_pct). The LOW-liquidity
+    # and cheap-item guards are then applied on top via max(), so a category floor can tighten or
+    # set the baseline but never weaken those guards.
+    base = (category_floors or {}).get(obs.category, cfg.floor_pct)
     if is_low:
-        floor = cfg.low_liq_floor                          # thin markets need a much bigger move
+        floor = max(base, cfg.low_liq_floor)               # thin markets need a much bigger move
     elif obs.price_exalt < cfg.cheap_price:
-        floor = cfg.cheap_floor_pct
+        floor = max(base, cfg.cheap_floor_pct)
     else:
-        floor = cfg.floor_pct
+        floor = base
     # LOW-liquidity moves never immediate-fire: a big move on a thin item can be one odd
     # listing, so it must still clear the 2-of-3 confirmation downstream.
     fast = abs(log_move) >= cfg.fast_path_log and not is_low
@@ -109,9 +114,14 @@ async def _fire_state(store, item_id: str, direction: str, mu_frozen: float, now
 
 
 async def detect(store, observations: list[Observation], anchor: Anchor,
-                 league_started_at: int, now_ts: int, cfg: DetectConfig):
+                 league_started_at: int, now_ts: int, cfg: DetectConfig,
+                 category_floors: dict[str, float] | None = None):
     early = in_early_league(now_ts, league_started_at, cfg.quality)
-    candidates: list[AlertEvent] = []
+    # Candidates are grouped by category so the top-K cap applies PER category — a volatile
+    # category can't crowd out alerts for the others the user enabled.
+    candidates_by_cat: dict[str, list[AlertEvent]] = {}
+    def _add(category: str, ev: AlertEvent) -> None:
+        candidates_by_cat.setdefault(category, []).append(ev)
     for obs in observations:
         last = await store.last_observation(obs.item_id)
         prev_src_ts = last.src_ts if last else None
@@ -127,14 +137,14 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
         st = await store.get_detector_state(obs.item_id)
         verdict = evaluate_price(obs, st["mu_frozen"], baseline_logs, st["last_fire_up_ts"],
                                  st["last_fire_dn_ts"], now_ts, anchor, cfg,
-                                 early_league=early)
+                                 early_league=early, category_floors=category_floors)
         if verdict.event is not None:
             ev = verdict.event
             if verdict.fast_path:
                 # fast-path: fire immediately, bypassing 2-of-3 and the min_samples gate
                 await _reset_pending(store, obs.item_id, ev.direction)
                 await _fire_state(store, obs.item_id, ev.direction, verdict.new_mu_frozen, now_ts)
-                candidates.append(ev)
+                _add(obs.category, ev)
             elif not has_min_samples(len(baseline_logs), cfg.quality):
                 await store.record_alert(_suppressed(obs), fired=False,
                                          suppressed_reason="insufficient_samples", src_ts=obs.src_ts)
@@ -145,7 +155,7 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
                 if n >= 2:
                     await _reset_pending(store, obs.item_id, ev.direction)
                     await _fire_state(store, obs.item_id, ev.direction, verdict.new_mu_frozen, now_ts)
-                    candidates.append(ev)
+                    _add(obs.category, ev)
         elif verdict.reason in ("cooldown", "early_league_mute"):
             await store.record_alert(_suppressed(obs), fired=False,
                                      suppressed_reason=verdict.reason, src_ts=obs.src_ts)
@@ -158,14 +168,19 @@ async def detect(store, observations: list[Observation], anchor: Anchor,
             last_dem = int(await store.get_setting(f"demfire:{obs.item_id}") or "0")
             if not last_dem or (now_ts - last_dem) >= cfg.cooldown_s:
                 await store.set_setting(f"demfire:{obs.item_id}", str(now_ts))
-                candidates.append(dem)
+                _add(obs.category, dem)
             else:
                 await store.record_alert(dem, fired=False, suppressed_reason="demand_cooldown", src_ts=now_ts)
-    candidates.sort(key=lambda e: e.severity, reverse=True)
-    kept = candidates[: cfg.top_k]
-    overflow_events = candidates[cfg.top_k:]
+    # Per-category top-K cap, then a final severity sort across the kept set for display order.
+    kept: list[AlertEvent] = []
+    overflow = 0
+    for evs in candidates_by_cat.values():
+        evs.sort(key=lambda e: e.severity, reverse=True)
+        kept.extend(evs[: cfg.top_k])
+        for ev in evs[cfg.top_k:]:
+            await store.record_alert(ev, fired=False, suppressed_reason="overflow_capped", src_ts=now_ts)
+        overflow += max(0, len(evs) - cfg.top_k)
+    kept.sort(key=lambda e: e.severity, reverse=True)
     for ev in kept:
         await store.record_alert(ev, fired=True, suppressed_reason=None, src_ts=now_ts)
-    for ev in overflow_events:
-        await store.record_alert(ev, fired=False, suppressed_reason="overflow_capped", src_ts=now_ts)
-    return kept, len(overflow_events)
+    return kept, overflow

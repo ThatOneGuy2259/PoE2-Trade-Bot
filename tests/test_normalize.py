@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from poe2bot.models import Anchor, LiquidityTier
-from poe2bot.sources.normalize import normalize_currency, tier_from_volume
+from poe2bot.sources.normalize import normalize_currency, tier_from_volume, _daily_volume
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -29,3 +29,18 @@ def test_normalize_currency_maps_fields():
     assert by_id["exalted"].liq_tier == LiquidityTier.LOW   # daily volume 40 -> LOW
     # CurrentPrice read in its own unit, never inverted (0.004 stays 0.004)
     assert by_id["exalted"].price_exalt == 0.004
+    assert divine.category == "currency"                # default category tag
+
+
+def test_normalize_currency_tags_requested_category():
+    raw = json.loads((FIX / "poe2scout_currency.json").read_text())
+    anchor = Anchor(divine_exalt=250.0, chaos_divine=1.0)
+    obs = normalize_currency(raw, "L", anchor, src_ts=1, category="fragments")
+    assert obs and all(o.category == "fragments" for o in obs)   # tagged with the requested api_id
+
+
+def test_daily_volume_skips_null_entries():
+    # uniques can carry null PriceLog gaps; the latest non-null Quantity still resolves
+    assert _daily_volume({"PriceLogs": [None, {"Price": 1.0, "Quantity": 42}, None]}) == 42.0
+    assert _daily_volume({"PriceLogs": [None, None]}) is None
+    assert _daily_volume({}) is None

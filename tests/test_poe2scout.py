@@ -13,9 +13,10 @@ class _FakeResp:
     async def json(self): return self._p
 
 class _FakeSession:
-    def __init__(self, payload): self._p = payload; self.last_headers = None
+    def __init__(self, payload): self._p = payload; self.last_headers = None; self.last_url = None
     def get(self, url, headers=None, params=None):
         self.last_headers = headers
+        self.last_url = url
         return _FakeResp(self._p)
 
 async def test_get_leagues_sends_ua_and_current_first():
@@ -36,7 +37,17 @@ async def test_get_current_league_and_meta():
 
 async def test_get_currency_overview_parses_items():
     payload = json.loads((FIX / "poe2scout_currency.json").read_text())
-    client = Poe2ScoutClient(_FakeSession(payload), ua="poe2bot/test")
+    sess = _FakeSession(payload)
+    client = Poe2ScoutClient(sess, ua="poe2bot/test", req_delay_s=0)
     raw = await client.get_currency_overview("Rise of the Abyssal")
     assert raw["Total"] == 2 and len(raw["Items"]) == 2
     assert {i["ApiId"] for i in raw["Items"]} == {"divine", "exalted"}
+    assert "Category=currency" in str(sess.last_url)          # default category
+
+
+async def test_get_currency_overview_threads_category():
+    payload = json.loads((FIX / "poe2scout_currency.json").read_text())
+    sess = _FakeSession(payload)
+    client = Poe2ScoutClient(sess, ua="poe2bot/test", req_delay_s=0)
+    await client.get_currency_overview("Rise of the Abyssal", "fragments")
+    assert "Category=fragments" in str(sess.last_url)         # category threads into the querystring

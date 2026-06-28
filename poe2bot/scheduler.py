@@ -1,7 +1,21 @@
 from __future__ import annotations
+import logging
 from .models import Anchor
 from .sources.normalize import normalize_currency
 from .detector.engine import detect, DetectConfig
+
+log = logging.getLogger(__name__)
+
+
+def _scanned_categories(raw: str | None) -> list[str]:
+    """Parse the `categories` setting into an ordered, de-duplicated list; default to
+    ['currency'] when unset/empty so behavior matches single-category Phase 1."""
+    seen: list[str] = []
+    for c in (raw or "").split(","):
+        c = c.strip()
+        if c and c not in seen:
+            seen.append(c)
+    return seen or ["currency"]
 
 
 def _clamp_anchor(new_divine: float, prev_divine: float | None, cap: float = 3.0) -> float:
@@ -24,8 +38,9 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
     league = await store.get_setting("league")
     if not league:
         return 0
+    # League meta drives the anchor that normalizes EVERY category into exalt, so a meta failure
+    # is systemic — handle it before the per-category loop and bail.
     try:
-        raw = await client.get_currency_overview(league)
         meta = await client.get_league_meta(league)
     except Exception:
         if breaker.record_failure():
@@ -45,8 +60,30 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
         await store.upsert_league(league, league, league, now_ts, anchor.divine_exalt, anchor.chaos_divine)
         await store.set_active_league(league)
         started = now_ts
-    obs = normalize_currency(raw, league, anchor, now_ts)
-    kept, overflow = await detect(store, obs, anchor, started, now_ts, cfg)
+    # Fetch each configured category; one bad category is skipped (logged), not fatal. The
+    # breaker only trips when EVERY category fetch fails (a systemic source outage).
+    categories = _scanned_categories(await store.get_setting("categories"))
+    obs = []
+    succeeded = 0
+    for cat in categories:
+        try:
+            raw = await client.get_currency_overview(league, cat)
+        except Exception as e:
+            log.warning("category %s fetch failed: %s", cat, e)
+            continue
+        succeeded += 1
+        obs.extend(normalize_currency(raw, league, anchor, now_ts, cat))
+    if succeeded == 0:
+        if breaker.record_failure():
+            await notify({"health": "source_down"})
+        return -1
+    # Per-category spike floors from the thr:<cat> settings (unset categories use the default).
+    category_floors: dict[str, float] = {}
+    for cat in categories:
+        v = await store.get_setting(f"thr:{cat}")
+        if v:
+            category_floors[cat] = float(v)
+    kept, overflow = await detect(store, obs, anchor, started, now_ts, cfg, category_floors)
     for ev in kept:
         await notify(ev)
     if overflow > 0:
