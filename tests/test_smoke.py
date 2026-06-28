@@ -41,8 +41,11 @@ async def test_end_to_end_pipeline_fires(tmp_path):
         await poll_once(s, client, cfg, now_ts=1001 + k, breaker=cb, notify=notify)
     rows = await s.price_log_window("divine", since_ts=0)
     assert len(rows) >= 15                                  # ledger persisted
-    fired = [e for e in sent if not isinstance(e, dict)]
+    # alerts now arrive as grouped digest payloads ({"digest": [...], "kind": "jumps"|"drops"})
+    digests = [p for p in sent if isinstance(p, dict) and "digest" in p]
+    fired = [e for d in digests for e in d["digest"]]
     assert len(fired) >= 1 and fired[0].cls == "JUMP"       # a real alert reached notify
+    assert any(d["kind"] == "jumps" for d in digests)       # grouped into the jumps table
     cur = await s._db.execute("SELECT COUNT(*) c FROM alert_log WHERE fired=1")
     assert (await cur.fetchone())["c"] >= 1                 # and was recorded as fired
     await s.close()

@@ -1,5 +1,7 @@
-from poe2bot.alerts import format_alert_lines, overflow_line
+from poe2bot.alerts import (format_alert_lines, overflow_line, humanize, format_digest,
+                            to_digest_embed)
 from poe2bot.models import AlertEvent, LiquidityTier
+import discord
 
 def _ev(cls="JUMP", direction="up", pct=0.30, trade_id="divine", tier=LiquidityTier.HIGH,
         low_confidence=False, price_exalt=100.0, price_div=0.25, price_chaos=2.5):
@@ -32,3 +34,59 @@ def test_demand_collapse_wording():
 
 def test_overflow_line():
     assert overflow_line(5) == "+5 more movers this cycle"
+
+
+def test_humanize():
+    assert humanize(250) == "250"
+    assert humanize(2500) == "2.5k"
+    assert humanize(184000) == "184k"
+    assert humanize(1_844_296) == "1.84M"
+    assert humanize(0.004) == "0.004"
+
+
+def test_format_digest_table():
+    evs = [_ev(price_exalt=250.0, price_chaos=2520.0, pct=0.45),
+           _ev(price_exalt=560000.0, price_chaos=5.6e6, pct=0.30,
+               tier=LiquidityTier.LOW, low_confidence=True)]
+    table = format_digest(evs)
+    lines = table.splitlines()
+    assert lines[0].split() == ["Item", "Ex", "Chaos", "Info"]   # header row, in order
+    assert "Divine Orb" in table
+    assert "250" in table and "2.5k" in table                    # humanized cells
+    assert "+45%" in table and "+30%" in table                   # Info = % move
+    assert "⚠" in table                                          # low-liquidity flag on the 2nd row
+
+
+def test_format_digest_demand_label():
+    table = format_digest([_ev(cls="DEMAND_COLLAPSE", direction="down", pct=-0.6)])
+    assert "-60%" in table and "vol" in table                    # volume drop marked
+
+
+async def test_notifier_routes_digests_and_overflow(tmp_path):
+    from types import SimpleNamespace
+    from poe2bot.store import Store
+    from poe2bot.main import build_notifier
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("alert_channel_id", "123")
+    sent = []
+    class _Ch:
+        async def send(self, content=None, embed=None): sent.append(embed.title if embed else content)
+    class _Bot:
+        def get_channel(self, cid): return _Ch() if cid == 123 else None
+    notify = build_notifier(_Bot(), s, SimpleNamespace(alert_channel_id=None, health_channel_id=None))
+    await notify({"digest": [_ev()], "kind": "jumps"})
+    await notify({"digest": [_ev(cls="CRASH", direction="down", pct=-0.4)], "kind": "drops"})
+    await notify({"overflow": 3})
+    assert any("Jumps" in str(x) for x in sent)                  # up events -> jumps message
+    assert any("Drops" in str(x) for x in sent)                  # down events -> drops message
+    assert any("3 more" in str(x) for x in sent)                 # overflow still a plain line
+    await s.close()
+
+
+def test_to_digest_embed_colors_and_title():
+    up = to_digest_embed([_ev()], "jumps")
+    assert "Jumps (1)" in up.title and "📈" in up.title
+    assert up.color == discord.Color.green()
+    down = to_digest_embed([_ev(cls="CRASH", direction="down", pct=-0.4)], "drops")
+    assert "Drops (1)" in down.title and down.color == discord.Color.red()
+    assert "```" in up.description                                # monospace code block table
