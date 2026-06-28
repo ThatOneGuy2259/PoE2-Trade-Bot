@@ -33,12 +33,12 @@ class LeagueService:
 
 
 class ItemService:
-    """Caches the active league's currency catalog as (display_name, api_id) pairs for
-    /price autocomplete. Re-fetches when the TTL lapses OR the league changes. Returns []
-    when no league is set yet (so autocomplete is empty, not an error)."""
+    """Caches (display_name, item_id) pairs for /price autocomplete, sourced from the STORE so it
+    covers every scanned category (currency AND uniques) and every suggestion is answerable. The
+    short TTL keeps it fresh as new items are observed; re-reads when the league changes. Returns
+    [] when no league is set yet (so autocomplete is empty, not an error)."""
 
-    def __init__(self, client: Poe2ScoutClient, store: Store, ttl_s: int = 3600):
-        self._client = client
+    def __init__(self, store: Store, ttl_s: int = 60):
         self._store = store
         self._ttl = ttl_s
         self._cache: list[tuple[str, str]] = []
@@ -46,16 +46,9 @@ class ItemService:
         self._league: str | None = None
 
     async def refresh(self, league: str, now_ts: int) -> list[tuple[str, str]]:
-        data = await self._client.get_currency_overview(league)
-        pairs: list[tuple[str, str]] = []
-        for it in data.get("Items", []):
-            api_id = it.get("ApiId")
-            if api_id is None:
-                continue
-            api_id = str(api_id)
-            pairs.append((it.get("Text") or api_id, api_id))   # value=ApiId == store item_id
-        self._cache, self._fetched_at, self._league = pairs, now_ts, league
-        return pairs
+        self._cache = await self._store.list_items(league)   # (name, item_id); item_id == store key
+        self._fetched_at, self._league = now_ts, league
+        return self._cache
 
     async def available(self, now_ts: int) -> list[tuple[str, str]]:
         league = await self._store.get_setting("league")

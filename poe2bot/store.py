@@ -108,6 +108,17 @@ class Store:
         row = await cur.fetchone()
         return int(row["c"]) if row else 0
 
+    async def list_items(self, league_id: str) -> list[tuple[str, str]]:
+        """(latest_name, item_id) for every distinct item observed in a league — the source for
+        /price autocomplete. Covers every scanned category (currency + uniques) since they all
+        land in `obs`. The name is taken from each item's most recent observation."""
+        # SQLite returns the bare `name`/`item_id` from the same row as MAX(src_ts), so this is
+        # one grouped pass — the latest name per item — rather than a correlated subquery.
+        cur = await self._db.execute(
+            "SELECT item_id, name, MAX(src_ts) FROM obs WHERE league_id=? GROUP BY item_id "
+            "ORDER BY name", (league_id,))
+        return [(r["name"], r["item_id"]) for r in await cur.fetchall()]
+
     async def price_log_window(self, item_id: str, since_ts: int) -> list[float]:
         cur = await self._db.execute(
             "SELECT log_price FROM obs WHERE item_id=? AND src_ts>=? AND valid=1 ORDER BY src_ts",
