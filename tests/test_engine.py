@@ -4,9 +4,10 @@ from poe2bot.detector.engine import DetectConfig, evaluate_price, evaluate_deman
 from poe2bot.store import Store
 from poe2bot.models import Observation, AlertEvent, Anchor, LiquidityTier
 
-# legacy tests use a baseline of 1.0 ex; disable the junk-price gate so it doesn't suppress them.
+# legacy tests use a baseline of 1.0 ex and assert single-call 2-of-3/fast-path behavior, so they
+# run with use_cusum=False (the rollback path) and the junk-price gate disabled.
 def _cfg(**kw):
-    return DetectConfig(min_alert_price_exalt=0, **kw)
+    return DetectConfig(min_alert_price_exalt=0, use_cusum=False, **kw)
 
 def _obs(price, tier=LiquidityTier.HIGH, src_ts=1000):
     return Observation(item_id="divine", league_id="L", src_ts=src_ts, wall_ts=src_ts,
@@ -269,7 +270,7 @@ def test_junk_gate_suppresses_floor_sitter():
     # baseline at the 1-ex display floor + a 1->2 ex (+100%) tick: clears the floor but is junk
     v = evaluate_price(_obs(2.0), mu_frozen=math.log(1.0), baseline_logs=[math.log(1.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
-                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig())
+                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig(use_cusum=False))
     assert v.event is None and v.reason == "below_min_price"
 
 
@@ -277,24 +278,24 @@ def test_junk_gate_allows_valuable_item():
     # baseline 5 ex (above the floor) + 30%: a real signal, not gated
     v = evaluate_price(_obs(6.5), mu_frozen=math.log(5.0), baseline_logs=[math.log(5.0)]*20,
                        last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
-                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig())
+                       anchor=Anchor(250.0, 1.0), cfg=DetectConfig(use_cusum=False))
     assert v.event is not None and v.event.cls == "JUMP"
 
 
 def test_junk_gate_blocks_demand_on_floor_item():
     obs = _cur(1.0, vol=8000.0, src_ts=5000)            # priced at the floor
-    assert evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig()) is None
+    assert evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig(use_cusum=False)) is None
 
 
 def test_junk_gate_allows_demand_on_valuable_item():
     obs = _cur(5.0, vol=8000.0, src_ts=5000)            # 5 ex, real item
-    ev = evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig())
+    ev = evaluate_demand(obs, [20000.0]*20, early_league=False, cfg=DetectConfig(use_cusum=False))
     assert ev is not None and ev.cls == "DEMAND_COLLAPSE"
 
 
 async def test_junk_gate_records_suppression_in_detect(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
-    cfg = DetectConfig()                                # gate ON (default 1.0)
+    cfg = DetectConfig(use_cusum=False)                                # gate ON (default 1.0)
     await _seed_flat(s, "junk", base_ts=99_980, price=1.0)
     k, o = await detect(s, [_cur(2.0, 1500.0, src_ts=100_001, item="junk")], Anchor(250.0, 1.0),
                         league_started_at=0, now_ts=100_010, cfg=cfg)
@@ -302,4 +303,117 @@ async def test_junk_gate_records_suppression_in_detect(tmp_path):
     row = await (await s._db.execute(
         "SELECT suppressed_reason FROM alert_log WHERE fired=0 ORDER BY alert_id DESC LIMIT 1")).fetchone()
     assert row["suppressed_reason"] == "below_min_price"
+    await s.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: self-normalizing CUSUM (default use_cusum=True)
+# ---------------------------------------------------------------------------
+
+def _ccfg(**kw):
+    return DetectConfig(min_alert_price_exalt=0, **kw)        # CUSUM on (default), junk gate off
+
+
+def test_cusum_cold_start_no_raise_no_fire():
+    # empty baseline must not call mad([]) and must not fire (still warming)
+    v = evaluate_price(_obs(5.0), mu_frozen=None, baseline_logs=[], last_fire_up_ts=0,
+                       last_fire_dn_ts=0, now_ts=10_000, anchor=Anchor(250.0, 1.0), cfg=DetectConfig())
+    assert v.event is None and v.cusum_pos == 0.0 and v.cusum_neg == 0.0
+
+
+def test_cusum_accumulates_over_polls_then_fires():
+    cfg = _ccfg()
+    base = [math.log(5.0)] * 20                              # constant -> scale floors to 0.05
+    def step(cp):
+        return evaluate_price(_obs(5.75), mu_frozen=math.log(5.0), baseline_logs=base,
+                              last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
+                              anchor=Anchor(250.0, 1.0), cfg=cfg, cusum_pos=cp)
+    v1 = step(0.0); assert v1.event is None and 2.2 < v1.cusum_pos < 2.4    # +15% accrues, not yet h
+    v2 = step(v1.cusum_pos); assert v2.event is None and v2.cusum_pos > 4.5
+    v3 = step(v2.cusum_pos)
+    assert v3.event is not None and v3.event.cls == "JUMP"   # crosses h=5 -> fires
+    assert v3.cusum_pos == 0.0                               # reset on fire
+
+
+def test_cusum_transient_revert_decays_no_fire():
+    cfg = _ccfg()
+    base = [math.log(5.0)] * 20
+    v1 = evaluate_price(_obs(5.75), math.log(5.0), base, 0, 0, 10_000, Anchor(250.0, 1.0), cfg, cusum_pos=0.0)
+    v2 = evaluate_price(_obs(5.0), math.log(5.0), base, 0, 0, 10_000, Anchor(250.0, 1.0), cfg,
+                        cusum_pos=v1.cusum_pos)              # price reverts to baseline
+    assert v2.event is None and v2.cusum_pos < v1.cusum_pos  # s_pos decays by k
+
+
+def test_cusum_sign_agreement():
+    cfg = _ccfg()
+    base = [math.log(5.0)] * 20
+    # s_pos already past h, but the CURRENT move is down -> no up-fire, and the down side isn't at h
+    v = evaluate_price(_obs(4.0), math.log(5.0), base, 0, 0, 10_000, Anchor(250.0, 1.0), cfg,
+                       cusum_pos=10.0, cusum_neg=0.0)
+    assert v.event is None
+
+
+def test_cusum_floor_gate_blocks_subfloor_hit():
+    cfg = _ccfg()
+    base = [math.log(5.0)] * 20
+    # CUSUM well past h, but the move (+8%) is below the 15% floor -> not a fire candidate
+    v = evaluate_price(_obs(5.4), math.log(5.0), base, 0, 0, 10_000, Anchor(250.0, 1.0), cfg, cusum_pos=10.0)
+    assert v.event is None
+
+
+def test_cusum_fast_path_fires_during_warmup():
+    cfg = _ccfg()
+    # only 3 samples (warmup) but a +60% move is fast-path -> fires immediately, bypassing min_samples
+    v = evaluate_price(_obs(8.0), mu_frozen=None, baseline_logs=[math.log(5.0)] * 3,
+                       last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
+                       anchor=Anchor(250.0, 1.0), cfg=cfg)
+    assert v.event is not None and v.fast_path is True
+
+
+def test_cusum_scale_is_volatility_adaptive():
+    cfg = _ccfg()
+    c = math.log(5.0)
+    volatile = [c - 0.0674, c + 0.0674] * 10                 # mad=0.0674 -> scale≈0.10
+    flat = [c] * 20                                          # mad=0 -> scale floors to 0.05
+    def s_after(base):
+        return evaluate_price(_obs(5.75), mu_frozen=c, baseline_logs=base, last_fire_up_ts=0,
+                              last_fire_dn_ts=0, now_ts=10_000, anchor=Anchor(250.0, 1.0),
+                              cfg=cfg, cusum_pos=0.0).cusum_pos
+    # the same +15% move accrues LESS on a volatile item (bigger scale) -> needs more polls to fire
+    assert s_after(volatile) < s_after(flat)
+
+
+def test_cusum_junk_gate_only_on_fire_candidate():
+    cfg = DetectConfig()                                     # CUSUM on, junk gate on (min=1.0)
+    base = [math.log(1.0)] * 20
+    # floor-sitter with a big accumulated CUSUM and a +100% move -> would-be fire is junk-gated
+    v = evaluate_price(_obs(2.0), mu_frozen=math.log(1.0), baseline_logs=base, last_fire_up_ts=0,
+                       last_fire_dn_ts=0, now_ts=10_000, anchor=Anchor(250.0, 1.0), cfg=cfg, cusum_pos=10.0)
+    assert v.event is None and v.reason == "below_min_price"
+
+
+async def test_cusum_detect_fires_and_resets_state(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = _ccfg()
+    await _seed_flat(s, "divine", base_ts=99_980, price=5.0)   # mu_frozen=log(5.0), 20 in-window samples
+    fired = None
+    for i in range(5):
+        k, _o = await detect(s, [_cur(5.75, 1500.0, src_ts=100_001 + i * 100, item="divine")],
+                             Anchor(250.0, 1.0), league_started_at=0, now_ts=100_010 + i * 100, cfg=cfg)
+        if k:
+            fired = k[0]; break
+    assert fired is not None and fired.cls == "JUMP"           # sustained +15% fires within a few polls
+    assert (await s.get_detector_state("divine"))["cusum_pos"] == 0.0   # reset on fire
+    await s.close()
+
+
+async def test_cusum_freezes_reference_on_warmup(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    cfg = _ccfg()
+    for k in range(12):                                        # 12 prior samples, NO pre-set mu_frozen
+        await s.insert_observation(_cur(5.0, 1500.0, 99_980 + k, item="x"))
+    await detect(s, [_cur(5.0, 1500.0, src_ts=100_001, item="x")], Anchor(250.0, 1.0),
+                 league_started_at=0, now_ts=100_010, cfg=cfg)
+    st = await s.get_detector_state("x")
+    assert st["mu_frozen"] is not None                         # reference frozen at warmup, before any fire
     await s.close()
