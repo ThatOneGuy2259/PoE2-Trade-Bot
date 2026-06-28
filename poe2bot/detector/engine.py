@@ -34,7 +34,6 @@ class PriceVerdict:
     new_mu_frozen: float | None
     reason: str | None
     fast_path: bool = False
-    confirmed: bool = False        # CUSUM-confirmed fire (detect fires directly, no 2-of-3)
     cusum_pos: float = 0.0         # post-update CUSUM state to persist
     cusum_neg: float = 0.0
 
@@ -143,7 +142,7 @@ def _evaluate_cusum(obs: Observation, mu_frozen: float | None, baseline_logs: li
     if not fast and not has_min_samples(len(baseline_logs), cfg.quality):
         return PriceVerdict(None, new_mu_frozen, "insufficient_samples", cusum_pos=s_pos, cusum_neg=s_neg)
     event = _build_event(obs, direction, log_move, move, reference, anchor, is_low)
-    return PriceVerdict(event, obs.log_price, None, fast_path=fast, confirmed=True,
+    return PriceVerdict(event, obs.log_price, None, fast_path=fast,
                         cusum_pos=0.0, cusum_neg=0.0)              # reset on fire
 
 

@@ -325,10 +325,10 @@ def test_cusum_accumulates_over_polls_then_fires():
     cfg = _ccfg()
     base = [math.log(5.0)] * 20                              # constant -> scale floors to 0.05
     def step(cp):
-        return evaluate_price(_obs(5.75), mu_frozen=math.log(5.0), baseline_logs=base,
+        return evaluate_price(_obs(5.8), mu_frozen=math.log(5.0), baseline_logs=base,
                               last_fire_up_ts=0, last_fire_dn_ts=0, now_ts=10_000,
                               anchor=Anchor(250.0, 1.0), cfg=cfg, cusum_pos=cp)
-    v1 = step(0.0); assert v1.event is None and 2.2 < v1.cusum_pos < 2.4    # +15% accrues, not yet h
+    v1 = step(0.0); assert v1.event is None and 2.3 < v1.cusum_pos < 2.6    # +16% accrues, not yet h
     v2 = step(v1.cusum_pos); assert v2.event is None and v2.cusum_pos > 4.5
     v3 = step(v2.cusum_pos)
     assert v3.event is not None and v3.event.cls == "JUMP"   # crosses h=5 -> fires
