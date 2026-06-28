@@ -62,6 +62,27 @@ def test_format_digest_demand_label():
     assert "-60%" in table and "vol" in table                    # volume drop marked
 
 
+async def test_notifier_routes_digests_and_overflow(tmp_path):
+    from types import SimpleNamespace
+    from poe2bot.store import Store
+    from poe2bot.main import build_notifier
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("alert_channel_id", "123")
+    sent = []
+    class _Ch:
+        async def send(self, content=None, embed=None): sent.append(embed.title if embed else content)
+    class _Bot:
+        def get_channel(self, cid): return _Ch() if cid == 123 else None
+    notify = build_notifier(_Bot(), s, SimpleNamespace(alert_channel_id=None, health_channel_id=None))
+    await notify({"digest": [_ev()], "kind": "jumps"})
+    await notify({"digest": [_ev(cls="CRASH", direction="down", pct=-0.4)], "kind": "drops"})
+    await notify({"overflow": 3})
+    assert any("Jumps" in str(x) for x in sent)                  # up events -> jumps message
+    assert any("Drops" in str(x) for x in sent)                  # down events -> drops message
+    assert any("3 more" in str(x) for x in sent)                 # overflow still a plain line
+    await s.close()
+
+
 def test_to_digest_embed_colors_and_title():
     up = to_digest_embed([_ev()], "jumps")
     assert "Jumps (1)" in up.title and "📈" in up.title
