@@ -16,7 +16,7 @@ CREATE INDEX IF NOT EXISTS ix_obs_item_ts ON obs(item_id, src_ts);
 CREATE TABLE IF NOT EXISTS detector_state (
   item_id TEXT PRIMARY KEY, mu_frozen REAL, n_obs INTEGER DEFAULT 0,
   last_fire_up_ts INTEGER DEFAULT 0, last_fire_dn_ts INTEGER DEFAULT 0,
-  recovery_count INTEGER DEFAULT 0);
+  recovery_count INTEGER DEFAULT 0, cusum_pos REAL DEFAULT 0, cusum_neg REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS alert_log (
   alert_id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT, src_ts INTEGER, cls TEXT,
   direction TEXT, magnitude REAL, baseline REAL, current REAL, severity REAL,
@@ -24,7 +24,18 @@ CREATE TABLE IF NOT EXISTS alert_log (
 """
 
 _STATE_DEFAULTS = {"mu_frozen": None, "n_obs": 0, "last_fire_up_ts": 0,
-                   "last_fire_dn_ts": 0, "recovery_count": 0}
+                   "last_fire_dn_ts": 0, "recovery_count": 0, "cusum_pos": 0.0, "cusum_neg": 0.0}
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """Add detector_state columns missing from a pre-existing DB (CREATE TABLE IF NOT EXISTS does
+    not alter an existing table). Idempotent: only adds a column when absent; ADD COLUMN ... DEFAULT
+    0 backfills existing rows to 0."""
+    cur = await db.execute("PRAGMA table_info(detector_state)")
+    cols = {r["name"] for r in await cur.fetchall()}
+    for col in ("cusum_pos", "cusum_neg"):
+        if col not in cols:
+            await db.execute(f"ALTER TABLE detector_state ADD COLUMN {col} REAL DEFAULT 0")
 
 
 class Store:
@@ -36,6 +47,7 @@ class Store:
         db = await aiosqlite.connect(path)
         db.row_factory = aiosqlite.Row
         await db.executescript(_SCHEMA)
+        await _migrate(db)
         await db.commit()
         return cls(db)
 

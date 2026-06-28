@@ -51,3 +51,34 @@ async def test_detector_state_roundtrip(tmp_path):
     st = await s.get_detector_state("divine")
     assert st["mu_frozen"] == 0.5 and st["n_obs"] == 3 and st["last_fire_dn_ts"] == 999
     await s.close()
+
+
+async def test_migration_adds_cusum_columns_to_existing_db(tmp_path):
+    import aiosqlite
+    p = str(tmp_path / "old.db")
+    # an OLD-schema detector_state (no cusum columns) with a populated row
+    db = await aiosqlite.connect(p)
+    await db.execute(
+        "CREATE TABLE detector_state (item_id TEXT PRIMARY KEY, mu_frozen REAL, "
+        "n_obs INTEGER DEFAULT 0, last_fire_up_ts INTEGER DEFAULT 0, "
+        "last_fire_dn_ts INTEGER DEFAULT 0, recovery_count INTEGER DEFAULT 0)")
+    await db.execute("INSERT INTO detector_state(item_id, mu_frozen) VALUES('x', 1.5)")
+    await db.commit()
+    await db.close()
+    # Store.open runs the migration: columns added, existing rows backfilled to 0, data preserved
+    s = await Store.open(p)
+    st = await s.get_detector_state("x")
+    assert st["mu_frozen"] == 1.5 and st["cusum_pos"] == 0.0 and st["cusum_neg"] == 0.0
+    await s.update_detector_state("x", cusum_pos=3.3, cusum_neg=-2.0)   # new columns are writable
+    st2 = await s.get_detector_state("x")
+    assert st2["cusum_pos"] == 3.3 and st2["cusum_neg"] == -2.0
+    await s.close()
+
+
+async def test_open_is_idempotent_re_migration(tmp_path):
+    # opening an already-migrated DB again must not error (columns already present)
+    p = str(tmp_path / "n.db")
+    s = await Store.open(p); await s.close()
+    s2 = await Store.open(p)                                  # second open re-runs _migrate harmlessly
+    assert (await s2.get_detector_state("nope"))["cusum_pos"] == 0.0
+    await s2.close()
