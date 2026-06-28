@@ -98,8 +98,14 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
         if v:
             category_floors[cat] = float(v)
     kept, overflow = await detect(store, obs, anchor, started, now_ts, cfg, category_floors)
-    for ev in kept:
-        await notify(ev)
+    # Consolidate into up to two messages: one table of jumps (price up), one of drops (price
+    # crashes + demand collapses), instead of an embed per item.
+    ups = [ev for ev in kept if ev.direction == "up"]
+    downs = [ev for ev in kept if ev.direction == "down"]
+    if ups:
+        await notify({"digest": ups, "kind": "jumps"})
+    if downs:
+        await notify({"digest": downs, "kind": "drops"})
     if overflow > 0:
         await notify({"overflow": overflow})
     await store.set_setting("last_poll_ts", str(now_ts))

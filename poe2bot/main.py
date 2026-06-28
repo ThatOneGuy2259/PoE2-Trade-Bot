@@ -11,7 +11,7 @@ from .bot import LeagueService, ItemService, build_bot, resolve_channel_id
 from .scheduler import poll_once
 from .detector.engine import DetectConfig
 from .health import CircuitBreaker, ping_dead_man
-from .alerts import to_embed, overflow_line, format_alert_lines
+from .alerts import to_embed, overflow_line, format_alert_lines, to_digest_embed, format_digest
 from .signals import to_currencies
 
 
@@ -31,10 +31,12 @@ def build_notifier(bot, store, settings):
         channel = bot.get_channel(aid) if aid else None
         if channel is None:
             return
-        if isinstance(payload, dict) and "overflow" in payload:
+        if isinstance(payload, dict) and "digest" in payload:
+            await channel.send(embed=to_digest_embed(payload["digest"], payload["kind"]))
+        elif isinstance(payload, dict) and "overflow" in payload:
             await channel.send(overflow_line(payload["overflow"]))
         else:
-            await channel.send(embed=to_embed(payload))
+            await channel.send(embed=to_embed(payload))   # legacy single-event (kept for compat)
     return notify
 
 
@@ -83,7 +85,11 @@ async def amain(env: Mapping[str, str]) -> None:
 
 
 async def _stdout_notify(payload):
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and "digest" in payload:
+        icon = "📈" if payload["kind"] == "jumps" else "📉"
+        print(f"\n{icon} {payload['kind'].upper()} ({len(payload['digest'])})")
+        print(format_digest(payload["digest"]))
+    elif isinstance(payload, dict):
         kind = "health" if "health" in payload else "overflow"
         print(f"  [{kind}] {payload}")
     else:
