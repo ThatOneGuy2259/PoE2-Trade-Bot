@@ -139,37 +139,43 @@ async def test_topmovers_empty_during_warmup(tmp_path):
     await s.close()
 
 
-# --- autocomplete: items ---------------------------------------------------
+# --- autocomplete: items (store-backed; covers currency + uniques) ---------
 
-class _StubItemClient:
-    def __init__(self, items): self._items = items; self.calls = 0
-    async def get_currency_overview(self, league): self.calls += 1; return {"Items": self._items}
+def _item_obs(item_id, name, league="Standard", ts=100, currency=True):
+    import math
+    return Observation(item_id=item_id, league_id=league, src_ts=ts, wall_ts=ts, name=name,
+                       category="currency" if currency else "weapon", is_currency_pair=currency,
+                       log_price=math.log(2.0), price_exalt=2.0, volume=1.0, vol_daily=None,
+                       stock=None, doi=None, liq_tier=LiquidityTier.HIGH, trade_id=None, valid=True)
 
 
-async def test_item_service_caches_and_keys_on_league(tmp_path):
+async def test_item_service_lists_observed_items_incl_uniques(tmp_path):
     s = await Store.open(str(tmp_path / "t.db"))
-    items = [{"ApiId": "divine", "Text": "Divine Orb"},
-             {"ApiId": "exalted", "Text": "Exalted Orb"},
-             {"ApiId": "noname"},                       # missing Text -> falls back to ApiId
-             {"Text": "No Id Here"}]                     # missing ApiId -> skipped entirely
-    c = _StubItemClient(items)
-    svc = ItemService(c, s, ttl_s=100)
-    # no league set -> empty, and no fetch attempted
-    assert await svc.available(now_ts=0) == []
-    assert c.calls == 0
+    svc = ItemService(s, ttl_s=100)
+    assert await svc.available(now_ts=0) == []                 # no league -> empty
     await s.set_setting("league", "Standard")
-    pairs = await svc.available(now_ts=0)
+    assert await svc.available(now_ts=0) == []                 # league set, no obs yet
+    await s.insert_observation(_item_obs("divine", "Divine Orb"))
+    await s.insert_observation(_item_obs("unique-42", "Bluetongue Shortsword", currency=False))
+    await s.insert_observation(_item_obs("other", "Other", league="HC"))   # different league
+    pairs = await svc.refresh("Standard", now_ts=200)
     assert ("Divine Orb", "divine") in pairs
-    assert ("noname", "noname") in pairs               # Text fallback -> ApiId
-    assert all(name != "No Id Here" for name, _ in pairs)   # ApiId-less item dropped
-    assert c.calls == 1
-    await svc.available(now_ts=50)                      # within ttl -> cached
-    assert c.calls == 1
-    await svc.available(now_ts=200)                     # ttl expired -> refetch
-    assert c.calls == 2
-    await s.set_setting("league", "Hardcore")          # league change -> refetch even in ttl
-    await svc.available(now_ts=210)
-    assert c.calls == 3
+    assert ("Bluetongue Shortsword", "unique-42") in pairs      # uniques now searchable by name
+    assert all(name != "Other" for name, _ in pairs)           # other-league item excluded
+    await s.close()
+
+
+async def test_item_service_latest_name_and_league_switch(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    svc = ItemService(s, ttl_s=100)
+    await s.set_setting("league", "Standard")
+    await s.insert_observation(_item_obs("divine", "Divine Orb", ts=100))
+    await s.insert_observation(_item_obs("divine", "Divine Orb v2", ts=300))   # newer name
+    assert ("Divine Orb v2", "divine") in await svc.refresh("Standard", now_ts=400)
+    await s.insert_observation(_item_obs("hc-item", "HC Item", league="Hardcore"))
+    await s.set_setting("league", "Hardcore")                  # league change -> re-read even in ttl
+    pairs = await svc.available(now_ts=410)
+    assert ("HC Item", "hc-item") in pairs and all(i != "divine" for _, i in pairs)
     await s.close()
 
 

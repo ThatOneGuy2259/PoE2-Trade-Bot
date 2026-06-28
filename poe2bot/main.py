@@ -44,7 +44,7 @@ async def amain(env: Mapping[str, str]) -> None:
     session = aiohttp.ClientSession()
     client = Poe2ScoutClient(session, settings.poe2scout_ua)
     league_service = LeagueService(client)
-    item_service = ItemService(client, store)
+    item_service = ItemService(store)
     breaker = CircuitBreaker()
     cfg = DetectConfig()
 
