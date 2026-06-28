@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 from urllib.parse import quote
 import aiohttp
 import yarl
@@ -15,11 +16,15 @@ class Poe2ScoutClient:
     """
 
     def __init__(self, session: aiohttp.ClientSession, ua: str,
-                 base: str = "https://api.poe2scout.com", realm: str = "poe2"):
+                 base: str = "https://api.poe2scout.com", realm: str = "poe2",
+                 req_delay_s: float = 0.4):
         self._session = session
         self._ua = ua
         self._base = base.rstrip("/")
         self._realm = realm
+        # Courtesy delay before each request so a multi-category poll (one fetch per category)
+        # stays within poe2scout's ~2 req/s etiquette. Tests pass req_delay_s=0.
+        self._req_delay_s = req_delay_s
 
     def _headers(self) -> dict:
         return {"User-Agent": self._ua, "Accept": "application/json"}
@@ -51,19 +56,22 @@ class Poe2ScoutClient:
                 return e
         return None
 
-    async def get_currency_overview(self, league: str, per_page: int = 250) -> dict:
-        """All currency items for a league, paging through Currencies/ByCategory.
+    async def get_currency_overview(self, league: str, category: str = "currency",
+                                    per_page: int = 250) -> dict:
+        """All items in one currency-family category for a league, paging through
+        Currencies/ByCategory.
 
-        Returns {"Items": [...all pages...], "Pages": n, "Total": t}. The league name
-        goes in the URL path (space-encoded); query is pre-built so yarl does not
-        double-encode it.
+        Returns {"Items": [...all pages...], "Pages": n, "Total": t}. Both the league name
+        and category go in pre-encoded URL parts so yarl does not double-encode them.
         """
         path = f"{self._base}/{self._realm}/Leagues/{quote(league, safe='')}/Currencies/ByCategory"
+        cat = quote(category, safe='')
         items: list[dict] = []
         page, pages, total = 1, 1, 0
         while True:
-            qs = f"Category=currency&PerPage={per_page}&Page={page}"
+            qs = f"Category={cat}&PerPage={per_page}&Page={page}"
             url = yarl.URL(f"{path}?{qs}", encoded=True)
+            await asyncio.sleep(self._req_delay_s)         # rate-limit courtesy
             async with self._session.get(url, headers=self._headers()) as r:
                 r.raise_for_status()
                 data = await r.json()

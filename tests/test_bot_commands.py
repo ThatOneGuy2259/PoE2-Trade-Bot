@@ -111,6 +111,11 @@ async def test_categories_and_threshold(tmp_path):
     assert await s.get_setting("categories") == "currency,uniques"
     await set_threshold_logic(s, "currency", 0.2)
     assert await s.get_setting("thr:currency") == "0.2"
+    # a fraction is required: a whole-number footgun (20 == "2000%") is rejected
+    with pytest.raises(ValueError):
+        await set_threshold_logic(s, "currency", 20)
+    with pytest.raises(ValueError):
+        await set_threshold_logic(s, "currency", 0)
     await s.close()
 
 

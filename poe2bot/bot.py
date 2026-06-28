@@ -178,6 +178,10 @@ async def set_categories_logic(store: Store, categories: list[str]) -> str:
 
 
 async def set_threshold_logic(store: Store, category: str, spike_pct: float) -> str:
+    # spike_pct is a fraction (0.2 == 20%). Reject out-of-range values so a "/threshold currency 20"
+    # footgun (stored as 20.0 → that category could never fire) is caught at entry.
+    if not (0 < spike_pct < 5):
+        raise ValueError(f"threshold must be a fraction between 0 and 5 (e.g. 0.2 for 20%), got {spike_pct}")
     await store.set_setting(f"thr:{category}", str(spike_pct))
     return f"Threshold for {category} set to {spike_pct:.0%}"
 
@@ -227,11 +231,13 @@ async def status_text(store: Store) -> str:
     league = await store.get_setting("league") or "(unset)"
     last_poll = await store.get_setting("last_poll_ts") or "(never)"
     top_k = await store.get_setting("top_k") or "8"
+    cats = await store.get_setting("categories") or "currency (default)"
     alert_ch = await store.get_setting("alert_channel_id")
     health_ch = await store.get_setting("health_channel_id")
     alert_disp = f"<#{alert_ch}>" if alert_ch else "(env default / run /setchannel)"
     health_disp = f"<#{health_ch}>" if health_ch else "(env default / run /sethealthchannel)"
-    return (f"League: {league}\nLast poll: {last_poll}\nPer-poll alert cap (K): {top_k}\n"
+    return (f"League: {league}\nScanning: {cats}\nLast poll: {last_poll}\n"
+            f"Per-category alert cap (K): {top_k}\n"
             f"Alert channel: {alert_disp}\nHealth channel: {health_disp}")
 
 
@@ -352,7 +358,11 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
                                     for api_id, label in CATEGORIES])
     async def threshold_cmd(interaction: discord.Interaction,
                             category: app_commands.Choice[str], spike_pct: float):
-        msg = await set_threshold_logic(store, category.value, spike_pct)
+        try:
+            msg = await set_threshold_logic(store, category.value, spike_pct)
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
         await interaction.response.send_message(msg, ephemeral=True)
 
     @bot.tree.command(name="price", description="Current value of an item")
