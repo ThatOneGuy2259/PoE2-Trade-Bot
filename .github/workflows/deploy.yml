@@ -47,8 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           sleep 10
-          status=$(docker inspect -f '{{.State.Status}}' poe2bot)
-          restarts=$(docker inspect -f '{{.State.RestartCount}}' poe2bot)
+          status=$(docker inspect --type container -f '{{.State.Status}}' poe2bot)
+          restarts=$(docker inspect --type container -f '{{.RestartCount}}' poe2bot)
           echo "container status=$status restarts=$restarts"
           docker logs --since 30s poe2bot 2>&1 | tail -20 || true
           if [ "$status" != "running" ]; then
