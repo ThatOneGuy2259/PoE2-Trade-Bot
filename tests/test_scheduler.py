@@ -197,3 +197,53 @@ async def test_poll_once_all_unknown_returns_zero_no_alarm(tmp_path):
     assert n == 0 and c.requested == []                         # nothing fetched
     assert {"health": "source_down"} not in sent and cb.is_open is False   # not a source-down alarm
     await s.close()
+
+
+# --- display-mode stamping into digest payloads -----------------------------
+
+import poe2bot.scheduler as sched
+from poe2bot.models import AlertEvent, LiquidityTier
+
+
+def _mode_ev(direction):
+    return AlertEvent(item_id="i", name="Mirror", cls="JUMP" if direction == "up" else "CRASH",
+                      direction=direction, magnitude=0.26, pct_move=0.3, baseline=1.0,
+                      current=1.3, severity=1.0, liq_tier=LiquidityTier.HIGH, trade_id=None,
+                      wfs=1.0, price_exalt=100.0, price_div=0.5, price_chaos=50.0,
+                      low_confidence=False)
+
+
+class _MetaClient:
+    """Empty currency payload (detect is monkeypatched) + league meta fixing the ex/chaos ratio."""
+    def __init__(self, divine, chaos):
+        self.divine, self.chaos = divine, chaos
+
+    async def get_league_meta(self, league):
+        return {"DivinePrice": self.divine, "ChaosDivinePrice": self.chaos}
+
+    async def get_currency_overview(self, league, category="currency"):
+        return {"CurrentPage": 1, "Pages": 1, "Total": 0, "Items": []}
+
+
+async def _run_mode(tmp_path, monkeypatch, divine, chaos):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "L")
+    async def fake_detect(*a, **k): return ([_mode_ev("up"), _mode_ev("down")], 0)
+    monkeypatch.setattr(sched, "detect", fake_detect)
+    sent = []
+    async def notify(p): sent.append(p)
+    await sched.poll_once(s, _MetaClient(divine, chaos), DetectConfig(),
+                          now_ts=1000, breaker=CircuitBreaker(), notify=notify)
+    await s.close()
+    return [p for p in sent if isinstance(p, dict) and "digest" in p]
+
+
+async def test_digest_payloads_carry_chaos_mode(tmp_path, monkeypatch):
+    digests = await _run_mode(tmp_path, monkeypatch, divine=240.0, chaos=10.0)   # 24 ex/chaos
+    assert digests and all(p["mode"] == "chaos" for p in digests)
+    assert {p["kind"] for p in digests} == {"jumps", "drops"}
+
+
+async def test_digest_payloads_carry_exalt_mode(tmp_path, monkeypatch):
+    digests = await _run_mode(tmp_path, monkeypatch, divine=190.0, chaos=10.0)   # 19 ex/chaos
+    assert digests and all(p["mode"] == "exalt" for p in digests)

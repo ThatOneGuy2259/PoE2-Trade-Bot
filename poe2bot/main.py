@@ -32,7 +32,8 @@ def build_notifier(bot, store, settings):
         if channel is None:
             return
         if isinstance(payload, dict) and "digest" in payload:
-            await channel.send(embed=to_digest_embed(payload["digest"], payload["kind"]))
+            await channel.send(embed=to_digest_embed(
+                payload["digest"], payload["kind"], payload.get("mode", "exalt")))
         elif isinstance(payload, dict) and "overflow" in payload:
             await channel.send(overflow_line(payload["overflow"]))
         else:
@@ -88,7 +89,7 @@ async def _stdout_notify(payload):
     if isinstance(payload, dict) and "digest" in payload:
         icon = "📈" if payload["kind"] == "jumps" else "📉"
         print(f"\n{icon} {payload['kind'].upper()} ({len(payload['digest'])})")
-        print(format_digest(payload["digest"]))
+        print(format_digest(payload["digest"], payload.get("mode", "exalt")))
     elif isinstance(payload, dict):
         kind = "health" if "health" in payload else "overflow"
         print(f"  [{kind}] {payload}")

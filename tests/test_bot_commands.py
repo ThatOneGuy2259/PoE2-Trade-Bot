@@ -5,7 +5,8 @@ from poe2bot.bot import (LeagueService, setleague_logic, status_text, set_catego
                          set_threshold_logic, price_text, topmovers_text,
                          set_alert_channel_logic, set_health_channel_logic, resolve_channel_id,
                          ItemService, filter_item_choices, filter_category_choices, CATEGORIES,
-                         sync_target_guilds, sync_commands, pollnow_logic)
+                         sync_target_guilds, sync_commands, pollnow_logic, set_breakpoint_logic)
+from poe2bot.display import BREAKPOINT_SETTING
 from poe2bot.models import Observation, LiquidityTier
 
 
@@ -275,3 +276,33 @@ def test_filter_category_choices():
     assert all(not v.endswith(",currency") for _, v in opts)                     # 'currency' excluded
     assert filter_category_choices("currency,fragments,").count(("currency,fragments,currency",
                                                                  "currency,fragments,currency")) == 0
+
+
+# --- currency-display breakpoint command + status line ----------------------
+
+async def test_set_breakpoint_logic_persists(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    msg = await set_breakpoint_logic(s, 25.0)
+    assert "25" in msg
+    assert await s.get_setting(BREAKPOINT_SETTING) == "25.0"
+    await s.close()
+
+
+async def test_set_breakpoint_logic_rejects_non_positive(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    with pytest.raises(ValueError):
+        await set_breakpoint_logic(s, 0.0)
+    with pytest.raises(ValueError):
+        await set_breakpoint_logic(s, -3.0)
+    await s.close()
+
+
+async def test_status_text_shows_breakpoint_and_mode(tmp_path):
+    s = await Store.open(str(tmp_path / "t.db"))
+    await s.set_setting("league", "L")
+    await s.set_setting("anchor_divine", "240.0")       # 24 ex/chaos -> chaos-mode
+    await s.set_setting("anchor_chaos_divine", "10.0")
+    txt = await status_text(s)
+    assert "chaos-mode" in txt
+    assert "20" in txt                                  # default breakpoint shown
+    await s.close()

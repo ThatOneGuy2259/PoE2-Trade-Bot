@@ -10,6 +10,7 @@ from .sources.poe2scout import Poe2ScoutClient
 from .models import LiquidityTier
 from .signals import wfs_phase1, to_currencies
 from .categories import CATEGORIES   # registry lives in a neutral module; re-exported here
+from .display import BREAKPOINT_SETTING, resolve_breakpoint, resolve_mode, exalt_per_chaos
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +165,14 @@ async def set_threshold_logic(store: Store, category: str, spike_pct: float) -> 
     return f"Threshold for {category} set to {spike_pct:.0%}"
 
 
+async def set_breakpoint_logic(store: Store, exalts: float) -> str:
+    # exalts = how many Exalted 1 Chaos must be worth before output switches to Chaos/Divine.
+    if exalts <= 0:
+        raise ValueError(f"breakpoint must be > 0 exalts, got {exalts}")
+    await store.set_setting(BREAKPOINT_SETTING, str(exalts))
+    return f"Currency-display breakpoint set to {exalts:g} exalts per chaos."
+
+
 async def set_alert_channel_logic(store: Store, channel_id: int) -> str:
     await store.set_setting("alert_channel_id", str(channel_id))
     return f"✅ Price/demand alerts will now post in <#{channel_id}>."
@@ -214,9 +223,15 @@ async def status_text(store: Store) -> str:
     health_ch = await store.get_setting("health_channel_id")
     alert_disp = f"<#{alert_ch}>" if alert_ch else "(env default / run /setchannel)"
     health_disp = f"<#{health_ch}>" if health_ch else "(env default / run /sethealthchannel)"
+    divine = float(await store.get_setting("anchor_divine") or "1.0")
+    chaos_divine = float(await store.get_setting("anchor_chaos_divine") or "1.0")
+    bp = await resolve_breakpoint(store)
+    mode = await resolve_mode(store, divine, chaos_divine)
+    ratio = exalt_per_chaos(divine, chaos_divine)
+    display_line = f"Display: {mode}-mode (breakpoint {bp:g} ex/chaos, now {ratio:.3g})"
     return (f"League: {league}\nScanning: {cats}\nLast poll: {last_poll}\n"
             f"Per-category alert cap (K): {top_k}\n"
-            f"Alert channel: {alert_disp}\nHealth channel: {health_disp}")
+            f"Alert channel: {alert_disp}\nHealth channel: {health_disp}\n{display_line}")
 
 
 def build_bot(store: Store, league_service: LeagueService, item_service: ItemService,
@@ -338,6 +353,17 @@ def build_bot(store: Store, league_service: LeagueService, item_service: ItemSer
                             category: app_commands.Choice[str], spike_pct: float):
         try:
             msg = await set_threshold_logic(store, category.value, spike_pct)
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @bot.tree.command(name="pricebreakpoint",
+                      description="Set the 1-chaos≥N-exalts breakpoint that switches display units")
+    @app_commands.default_permissions(manage_guild=True)
+    async def pricebreakpoint_cmd(interaction: discord.Interaction, exalts: float):
+        try:
+            msg = await set_breakpoint_logic(store, exalts)
         except ValueError as e:
             await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
             return

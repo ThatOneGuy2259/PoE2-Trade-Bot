@@ -1,5 +1,5 @@
 from poe2bot.alerts import (format_alert_lines, overflow_line, humanize, format_digest,
-                            to_digest_embed)
+                            to_digest_embed, _digest_row)
 from poe2bot.models import AlertEvent, LiquidityTier
 import discord
 
@@ -90,3 +90,41 @@ def test_to_digest_embed_colors_and_title():
     down = to_digest_embed([_ev(cls="CRASH", direction="down", pct=-0.4)], "drops")
     assert "Drops (1)" in down.title and down.color == discord.Color.red()
     assert "```" in up.description                                # monospace code block table
+
+
+# --- mode-aware digest columns (Ex/Chaos vs Chaos/Div) ----------------------
+
+def test_digest_exalt_mode_headers_and_cells():
+    out = format_digest([_ev(price_exalt=100.0, price_chaos=50.0, price_div=0.5)], mode="exalt")
+    header, row = out.splitlines()[0], out.splitlines()[1]
+    assert "Ex" in header and "Chaos" in header and "Div" not in header
+    assert "100" in row and "50" in row          # price_exalt primary, price_chaos secondary
+
+
+def test_digest_chaos_mode_headers_and_cells():
+    out = format_digest([_ev(price_exalt=100.0, price_chaos=50.0, price_div=0.5)], mode="chaos")
+    header, row = out.splitlines()[0], out.splitlines()[1]
+    assert "Chaos" in header and "Div" in header and "Ex" not in header
+    assert "50" in row and "0.5" in row          # price_chaos primary, price_div secondary
+
+
+def test_digest_default_mode_is_exalt():
+    assert format_digest([_ev()]) == format_digest([_ev()], mode="exalt")
+
+
+def test_digest_row_selects_attributes_by_mode():
+    e = _ev(price_exalt=100.0, price_chaos=50.0, price_div=0.5)
+    ex_row, ch_row = _digest_row(e, "exalt"), _digest_row(e, "chaos")
+    assert ex_row[1] == "100" and ex_row[2] == "50"     # ex, chaos
+    assert ch_row[1] == "50" and ch_row[2] == "0.5"     # chaos, div
+
+
+def test_to_digest_embed_threads_mode():
+    assert "Div" in to_digest_embed([_ev()], "jumps", mode="chaos").description
+
+
+async def test_stdout_notify_handles_mode_key(capsys):
+    import poe2bot.main as mainmod
+    await mainmod._stdout_notify({"digest": [_ev()], "kind": "jumps", "mode": "chaos"})
+    out = capsys.readouterr().out
+    assert "JUMPS" in out and "Div" in out
