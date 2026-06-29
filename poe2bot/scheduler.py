@@ -4,6 +4,7 @@ from .models import Anchor
 from .sources.normalize import normalize_currency, normalize_uniques
 from .detector.engine import detect, DetectConfig
 from .categories import category_family
+from .display import resolve_mode
 
 log = logging.getLogger(__name__)
 
@@ -99,13 +100,15 @@ async def poll_once(store, client, cfg: DetectConfig, now_ts: int, breaker, noti
             category_floors[cat] = float(v)
     kept, overflow = await detect(store, obs, anchor, started, now_ts, cfg, category_floors)
     # Consolidate into up to two messages: one table of jumps (price up), one of drops (price
-    # crashes + demand collapses), instead of an embed per item.
+    # crashes + demand collapses), instead of an embed per item. Choose display units once, at
+    # the fresh anchor, and stamp it into each payload so every consumer renders the same columns.
+    mode = await resolve_mode(store, anchor.divine_exalt, anchor.chaos_divine)
     ups = [ev for ev in kept if ev.direction == "up"]
     downs = [ev for ev in kept if ev.direction == "down"]
     if ups:
-        await notify({"digest": ups, "kind": "jumps"})
+        await notify({"digest": ups, "kind": "jumps", "mode": mode})
     if downs:
-        await notify({"digest": downs, "kind": "drops"})
+        await notify({"digest": downs, "kind": "drops", "mode": mode})
     if overflow > 0:
         await notify({"overflow": overflow})
     await store.set_setting("last_poll_ts", str(now_ts))

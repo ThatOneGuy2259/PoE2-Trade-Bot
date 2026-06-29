@@ -121,3 +121,10 @@ def test_digest_row_selects_attributes_by_mode():
 
 def test_to_digest_embed_threads_mode():
     assert "Div" in to_digest_embed([_ev()], "jumps", mode="chaos").description
+
+
+async def test_stdout_notify_handles_mode_key(capsys):
+    import poe2bot.main as mainmod
+    await mainmod._stdout_notify({"digest": [_ev()], "kind": "jumps", "mode": "chaos"})
+    out = capsys.readouterr().out
+    assert "JUMPS" in out and "Div" in out
